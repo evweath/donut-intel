@@ -1,0 +1,1293 @@
+<!DOCTYPE html>
+<html lang="en" x-data="app()" x-init="init()" :class="{ 'dark': darkMode }">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Donut Intel Platform</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.13.5/cdn.min.js" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet" />
+  <link href="/static/css/style.css" rel="stylesheet" />
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 min-h-screen transition-colors duration-200">
+
+<!-- Login Screen -->
+<div x-show="!authenticated" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-yellow-400 to-orange-500">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 w-full max-w-md">
+    <div class="text-center mb-6">
+      <div class="text-5xl mb-2">🍩</div>
+      <h1 class="text-2xl font-bold text-gray-800 dark:text-white">Donut Intel Platform</h1>
+      <p class="text-gray-500 text-sm mt-1">Product Intelligence Dashboard</p>
+    </div>
+    <div x-show="loginError" class="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded mb-4 text-sm" x-text="loginError"></div>
+    <input x-model="loginForm.username" type="text" placeholder="Username" class="w-full border rounded-lg px-4 py-3 mb-3 focus:outline-none focus:ring-2 focus:ring-orange-400 dark:bg-gray-700 dark:border-gray-600" @keyup.enter="doLogin()" />
+    <input x-model="loginForm.password" type="password" placeholder="Password" class="w-full border rounded-lg px-4 py-3 mb-4 focus:outline-none focus:ring-2 focus:ring-orange-400 dark:bg-gray-700 dark:border-gray-600" @keyup.enter="doLogin()" />
+    <button @click="doLogin()" class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-lg transition">Sign In</button>
+  </div>
+</div>
+
+<!-- Main App -->
+<div x-show="authenticated" class="flex h-screen overflow-hidden">
+
+  <!-- Sidebar -->
+  <aside class="w-64 bg-gray-900 dark:bg-gray-950 flex-shrink-0 flex flex-col shadow-xl">
+    <div class="flex items-center gap-2 px-4 py-4 border-b border-gray-700">
+      <span class="text-2xl">🍩</span>
+      <div>
+        <div class="font-bold text-white text-sm">Donut Intel</div>
+        <div class="text-gray-400 text-xs">Platform v1.0</div>
+      </div>
+    </div>
+
+    <nav class="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
+      <template x-for="item in navItems" :key="item.id">
+        <button
+          @click="currentView = item.id; item.id === 'products' && loadProducts(1); item.id === 'competitors' && loadCompetitors(1); item.id === 'pricing' && loadPriceMatrix(1); item.id === 'scheduler' && loadJobs(); item.id === 'export' && loadExportHistory()"
+          :class="currentView === item.id
+            ? 'bg-orange-600 text-white'
+            : 'text-gray-300 hover:bg-gray-700 hover:text-white'"
+          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors"
+        >
+          <span class="text-lg" x-text="item.icon"></span>
+          <span x-text="item.label"></span>
+          <span x-show="item.badge && item.badge > 0"
+            class="ml-auto bg-red-500 text-white text-xs rounded-full px-2 py-0.5"
+            x-text="item.badge">
+          </span>
+        </button>
+      </template>
+    </nav>
+
+    <div class="px-4 py-3 border-t border-gray-700">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <div class="w-2 h-2 rounded-full" :class="wsConnected ? 'bg-green-400' : 'bg-red-400'"></div>
+          <span class="text-xs text-gray-400" x-text="wsConnected ? 'Live' : 'Offline'"></span>
+        </div>
+        <button @click="darkMode = !darkMode" class="text-gray-400 hover:text-white transition text-lg">
+          <span x-text="darkMode ? '☀️' : '🌙'"></span>
+        </button>
+        <button @click="doLogout()" class="text-gray-400 hover:text-red-400 transition text-xs">Sign Out</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="flex-1 overflow-y-auto bg-gray-100 dark:bg-gray-900">
+
+    <!-- Toast Notifications -->
+    <div class="fixed top-4 right-4 z-50 space-y-2">
+      <template x-for="toast in toasts" :key="toast.id">
+        <div :class="toast.type === 'error' ? 'bg-red-600' : toast.type === 'success' ? 'bg-green-600' : 'bg-blue-600'"
+          class="text-white px-4 py-3 rounded-lg shadow-lg max-w-sm text-sm flex items-start gap-2 animate-fade-in">
+          <span x-text="toast.icon"></span>
+          <span x-text="toast.message" class="flex-1"></span>
+          <button @click="removeToast(toast.id)" class="opacity-70 hover:opacity-100">✕</button>
+        </div>
+      </template>
+    </div>
+
+    <!-- ===== DASHBOARD VIEW ===== -->
+    <div x-show="currentView === 'dashboard'" class="p-6">
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-2xl font-bold">Dashboard</h2>
+        <button @click="loadStats()" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm transition">
+          🔄 Refresh
+        </button>
+      </div>
+
+      <!-- Stats Cards -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <div class="text-3xl font-bold text-orange-500" x-text="stats.total_products || 0"></div>
+          <div class="text-sm text-gray-500 mt-1">Total Products</div>
+        </div>
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <div class="text-3xl font-bold text-blue-500" x-text="stats.total_sources || 0"></div>
+          <div class="text-sm text-gray-500 mt-1">Source Listings</div>
+        </div>
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 cursor-pointer hover:ring-2 ring-red-400" @click="currentView='duplicates'">
+          <div class="text-3xl font-bold text-red-500" x-text="stats.pending_duplicates || 0"></div>
+          <div class="text-sm text-gray-500 mt-1">Pending Duplicates</div>
+        </div>
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <div class="text-3xl font-bold text-green-500" x-text="stats.last_scan ? stats.last_scan.new_products : 0"></div>
+          <div class="text-sm text-gray-500 mt-1">New This Scan</div>
+        </div>
+      </div>
+
+      <!-- Products by Site & Last Scan -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3">Products by Source Site</h3>
+          <div class="space-y-2">
+            <template x-for="[site, count] in Object.entries(stats.products_by_site || {})" :key="site">
+              <div class="flex items-center gap-2">
+                <span class="text-sm flex-1 truncate text-gray-600 dark:text-gray-400" x-text="site"></span>
+                <div class="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                  <div class="bg-orange-500 h-2 rounded-full"
+                    :style="`width: ${Math.min(100, count / Math.max(...Object.values(stats.products_by_site || {1:1})) * 100)}%`">
+                  </div>
+                </div>
+                <span class="text-sm font-bold w-8 text-right" x-text="count"></span>
+              </div>
+            </template>
+            <div x-show="Object.keys(stats.products_by_site || {}).length === 0" class="text-gray-400 text-sm">
+              No data yet — run a scan first.
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3">Last Scan</h3>
+          <div x-show="stats.last_scan">
+            <div class="flex items-center gap-2 mb-2">
+              <span :class="{
+                'bg-green-100 text-green-700': stats.last_scan?.status === 'completed',
+                'bg-yellow-100 text-yellow-700': stats.last_scan?.status === 'running',
+                'bg-red-100 text-red-700': stats.last_scan?.status === 'failed',
+                'bg-gray-100 text-gray-700': !['completed','running','failed'].includes(stats.last_scan?.status)
+              }" class="px-2 py-0.5 rounded-full text-xs font-semibold" x-text="stats.last_scan?.status"></span>
+            </div>
+            <div class="text-sm text-gray-500" x-text="stats.last_scan?.started_at ? new Date(stats.last_scan.started_at).toLocaleString() : ''"></div>
+          </div>
+          <div x-show="!stats.last_scan" class="text-gray-400 text-sm">No scans run yet.</div>
+
+          <div class="mt-4">
+            <h3 class="font-semibold mb-2 text-sm">Database</h3>
+            <div class="text-xs text-gray-500 space-y-1">
+              <div>Path: <span class="font-mono" x-text="stats.db?.path || '—'"></span></div>
+              <div>Size: <span x-text="stats.db?.size_mb + ' MB'"></span></div>
+              <div x-show="stats.db?.on_network_drive" class="text-yellow-600 font-semibold">⚠ Network drive — WAL mode active</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+        <h3 class="font-semibold mb-3">Quick Actions</h3>
+        <div class="flex flex-wrap gap-3">
+          <button @click="startScan()" :disabled="scanRunning"
+            class="bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+            <span x-text="scanRunning ? '⏳ Scanning...' : '🔍 Scan All Sources'"></span>
+          </button>
+          <button @click="runDedup()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+            🔁 Run Deduplication
+          </button>
+              <button @click="currentView='products'; loadProducts(1)" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 px-4 py-2 rounded-lg text-sm font-medium transition">
+            📦 View Products
+          </button>
+          <button @click="currentView='competitors'; loadCompetitors(1)" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 px-4 py-2 rounded-lg text-sm font-medium transition">
+            🏪 Competitors
+          </button>
+          <button @click="currentView='pricing'; loadPriceMatrix(1)" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 px-4 py-2 rounded-lg text-sm font-medium transition">
+            💰 Price Matrix
+          </button>
+          <button @click="currentView='export'" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+            📤 Export
+          </button>
+        </div>
+
+        <!-- Scan Progress -->
+        <div x-show="scanRunning" class="mt-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg p-3">
+          <div class="flex items-center gap-2 mb-2">
+            <div class="animate-spin text-orange-500">⏳</div>
+            <span class="font-medium text-sm" x-text="scanStatus.message || 'Scanning...'"></span>
+          </div>
+          <div x-show="scanStatus.current && scanStatus.total" class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+            <div class="bg-orange-500 h-2 rounded-full transition-all"
+              :style="`width: ${Math.round(scanStatus.current / scanStatus.total * 100)}%`">
+            </div>
+          </div>
+          <div class="text-xs text-gray-500 mt-1" x-show="scanStatus.current">
+            <span x-text="scanStatus.current"></span> / <span x-text="scanStatus.total"></span> products
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PRODUCTS VIEW ===== -->
+    <div x-show="currentView === 'products'" class="p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-2xl font-bold">Product Catalog</h2>
+        <span class="text-sm text-gray-500" x-text="`${productData.total || 0} products`"></span>
+      </div>
+
+      <!-- Filters -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 mb-4">
+        <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          <input x-model="productFilters.search" @input.debounce.400ms="loadProducts(1)"
+            placeholder="Search title, model, SKU..."
+            class="col-span-2 lg:col-span-2 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+          <select x-model="productFilters.manufacturer" @change="loadProducts(1)"
+            class="border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 focus:outline-none">
+            <option value="">All Manufacturers</option>
+            <template x-for="m in filterOptions.manufacturers" :key="m">
+              <option :value="m" x-text="m"></option>
+            </template>
+          </select>
+          <select x-model="productFilters.category" @change="loadProducts(1)"
+            class="border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 focus:outline-none">
+            <option value="">All Categories</option>
+            <template x-for="c in filterOptions.categories" :key="c">
+              <option :value="c" x-text="c"></option>
+            </template>
+          </select>
+          <select x-model="productFilters.source_site" @change="loadProducts(1)"
+            class="border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 focus:outline-none">
+            <option value="">All Sites</option>
+            <template x-for="s in filterOptions.source_sites" :key="s">
+              <option :value="s" x-text="s"></option>
+            </template>
+          </select>
+        </div>
+      </div>
+
+      <!-- Product Table -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
+        <div x-show="loadingProducts" class="flex items-center justify-center py-12">
+          <div class="text-gray-400">Loading products...</div>
+        </div>
+        <div x-show="!loadingProducts && productData.products && productData.products.length === 0" class="text-center py-12 text-gray-400">
+          No products found. Run a source scan to populate the catalog.
+        </div>
+        <div x-show="!loadingProducts && productData.products && productData.products.length > 0">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
+              <tr>
+                <th class="text-left px-4 py-3 font-semibold">Product</th>
+                <th class="text-left px-4 py-3 font-semibold hidden lg:table-cell">Manufacturer</th>
+                <th class="text-left px-4 py-3 font-semibold hidden lg:table-cell">Model</th>
+                <th class="text-right px-4 py-3 font-semibold">Price</th>
+                <th class="text-center px-4 py-3 font-semibold hidden md:table-cell">Sites</th>
+                <th class="px-4 py-3"></th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+              <template x-for="p in productData.products" :key="p.id">
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" @click="openProduct(p)">
+                  <td class="px-4 py-3">
+                    <div class="flex items-center gap-3">
+                      <img x-show="p.primary_image" :src="p.primary_image" class="w-10 h-10 object-cover rounded-lg bg-gray-100" loading="lazy" @error="$el.style.display='none'" />
+                      <div class="w-10 h-10 bg-gray-100 dark:bg-gray-700 rounded-lg flex items-center justify-center text-lg" x-show="!p.primary_image">📦</div>
+                      <div>
+                        <div class="font-medium line-clamp-1" x-text="p.title"></div>
+                        <div class="text-xs text-gray-400" x-text="p.sku ? 'SKU: ' + p.sku : p.category || ''"></div>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="px-4 py-3 text-gray-600 dark:text-gray-400 hidden lg:table-cell" x-text="p.manufacturer || '—'"></td>
+                  <td class="px-4 py-3 font-mono text-xs text-gray-500 hidden lg:table-cell" x-text="p.model_number || '—'"></td>
+                  <td class="px-4 py-3 text-right font-semibold text-green-600" x-text="p.price ? '$' + p.price.toFixed(2) : '—'"></td>
+                  <td class="px-4 py-3 text-center hidden md:table-cell">
+                    <div class="flex justify-center gap-1 flex-wrap">
+                      <template x-for="site in p.sources" :key="site.site">
+                        <span class="text-xs bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded" x-text="site.site.split('.')[0]"></span>
+                      </template>
+                    </div>
+                  </td>
+                  <td class="px-4 py-3 text-right">
+                    <span class="text-gray-400 hover:text-orange-500">›</span>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+
+          <!-- Pagination -->
+          <div class="flex items-center justify-between px-4 py-3 border-t border-gray-100 dark:border-gray-700">
+            <span class="text-sm text-gray-500">
+              Page <span x-text="productData.page"></span> of <span x-text="productData.pages || 1"></span>
+            </span>
+            <div class="flex gap-2">
+              <button @click="loadProducts(productData.page - 1)" :disabled="productData.page <= 1"
+                class="px-3 py-1 rounded border text-sm disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-700">← Prev</button>
+              <button @click="loadProducts(productData.page + 1)" :disabled="productData.page >= productData.pages"
+                class="px-3 py-1 rounded border text-sm disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-700">Next →</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== SCANS VIEW ===== -->
+    <div x-show="currentView === 'scans'" class="p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-2xl font-bold">Scan Sessions</h2>
+        <button @click="startScan()" :disabled="scanRunning"
+          class="bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium">
+          <span x-text="scanRunning ? '⏳ Scanning...' : '▶ New Scan'"></span>
+        </button>
+      </div>
+
+      <!-- Scan by Site -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 mb-4">
+        <h3 class="font-semibold mb-3">Scan Individual Sites</h3>
+        <div class="flex flex-wrap gap-2">
+          <template x-for="site in sourceSites" :key="site.domain">
+            <button @click="startScan(site.domain)" :disabled="scanRunning"
+              class="border border-orange-400 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/20 px-3 py-1.5 rounded-lg text-sm transition disabled:opacity-40">
+              🔍 <span x-text="site.name"></span>
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <!-- Sessions Table -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 dark:bg-gray-700 text-gray-500">
+            <tr>
+              <th class="text-left px-4 py-3">Session</th>
+              <th class="text-left px-4 py-3">Status</th>
+              <th class="text-right px-4 py-3">New</th>
+              <th class="text-right px-4 py-3">Updated</th>
+              <th class="text-right px-4 py-3">Errors</th>
+              <th class="text-left px-4 py-3 hidden md:table-cell">Started</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+            <template x-for="s in scanSessions.sessions" :key="s.id">
+              <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                <td class="px-4 py-3">
+                  <div x-text="s.name || 'Scan #' + s.id" class="font-medium"></div>
+                  <div class="text-xs text-gray-400" x-text="s.target"></div>
+                </td>
+                <td class="px-4 py-3">
+                  <span :class="{
+                    'bg-green-100 text-green-700': s.status === 'completed',
+                    'bg-yellow-100 text-yellow-700': s.status === 'running',
+                    'bg-red-100 text-red-700': s.status === 'failed',
+                    'bg-gray-100 text-gray-500': s.status === 'pending' || s.status === 'cancelled',
+                  }" class="px-2 py-0.5 rounded-full text-xs font-semibold" x-text="s.status"></span>
+                </td>
+                <td class="px-4 py-3 text-right text-green-600 font-semibold" x-text="s.new_products || 0"></td>
+                <td class="px-4 py-3 text-right text-blue-600" x-text="s.updated_products || 0"></td>
+                <td class="px-4 py-3 text-right text-red-500" x-text="s.errors || 0"></td>
+                <td class="px-4 py-3 text-xs text-gray-400 hidden md:table-cell" x-text="s.started_at ? new Date(s.started_at).toLocaleString() : '—'"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+        <div x-show="!scanSessions.sessions || scanSessions.sessions.length === 0" class="text-center py-8 text-gray-400">
+          No scan sessions yet.
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== DUPLICATES VIEW ===== -->
+    <div x-show="currentView === 'duplicates'" class="p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-2xl font-bold">Duplicate Review</h2>
+        <div class="flex gap-2">
+          <select x-model="dupFilter" @change="loadDuplicates()" class="border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600">
+            <option value="pending">Pending</option>
+            <option value="merged">Merged</option>
+            <option value="rejected">Rejected</option>
+            <option value="all">All</option>
+          </select>
+          <button @click="runDedup()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm">
+            🔁 Re-run Dedup
+          </button>
+        </div>
+      </div>
+
+      <div x-show="duplicates.candidates && duplicates.candidates.length === 0" class="bg-white dark:bg-gray-800 rounded-xl shadow p-12 text-center text-gray-400">
+        <div class="text-4xl mb-2">✅</div>
+        <div>No pending duplicates.</div>
+      </div>
+
+      <div class="space-y-3">
+        <template x-for="dup in duplicates.candidates" :key="dup.id">
+          <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+            <div class="flex items-center justify-between mb-3">
+              <div class="flex items-center gap-3">
+                <div class="text-2xl font-bold"
+                  :class="dup.confidence_score >= 85 ? 'text-red-500' : dup.confidence_score >= 70 ? 'text-yellow-500' : 'text-gray-500'"
+                  x-text="Math.round(dup.confidence_score) + '%'">
+                </div>
+                <div>
+                  <div class="text-xs font-semibold text-gray-500">CONFIDENCE SCORE</div>
+                  <div class="text-xs text-gray-400">Match factors:</div>
+                </div>
+                <div class="flex flex-wrap gap-1">
+                  <template x-for="[factor, score] in Object.entries(dup.match_reasons || {}).filter(([k,v]) => typeof v === 'number' && v > 0)">
+                    <span class="text-xs bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded font-mono"
+                      x-text="`${factor}: ${Math.round(score)}`">
+                    </span>
+                  </template>
+                </div>
+              </div>
+              <div x-show="dup.status === 'pending'" class="flex gap-2">
+                <button @click="resolvedup(dup.id, 'merge')"
+                  class="bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg text-sm">✓ Merge</button>
+                <button @click="resolvedup(dup.id, 'reject')"
+                  class="bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1.5 rounded-lg text-sm">✗ Reject</button>
+              </div>
+              <span x-show="dup.status !== 'pending'"
+                :class="dup.status === 'merged' ? 'text-green-600' : 'text-red-500'"
+                class="text-sm font-semibold capitalize" x-text="dup.status">
+              </span>
+            </div>
+            <!-- Side-by-side comparison (F74) -->
+            <div class="grid grid-cols-2 gap-4">
+              <template x-for="[side, product] in [['Primary', dup.primary], ['Secondary', dup.secondary]]" :key="side">
+                <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                  <div class="text-xs font-bold text-gray-400 uppercase mb-2" x-text="side"></div>
+                  <div class="flex items-start gap-2 mb-2">
+                    <img x-show="product.image" :src="product.image" class="w-12 h-12 object-cover rounded" loading="lazy" @error="$el.style.display='none'" />
+                    <div>
+                      <div class="text-sm font-medium line-clamp-2" x-text="product.title"></div>
+                      <div class="text-xs text-green-600 font-bold mt-0.5" x-text="product.price ? '$' + product.price.toFixed(2) : '—'"></div>
+                    </div>
+                  </div>
+                  <div class="text-xs text-gray-500 space-y-0.5">
+                    <div x-show="product.manufacturer">Mfr: <span class="font-medium" x-text="product.manufacturer"></span></div>
+                    <div x-show="product.model_number">Model: <span class="font-mono" x-text="product.model_number"></span></div>
+                    <div>Sites: <span class="text-blue-500" x-text="(product.sources || []).join(', ')"></span></div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- ===== COMPETITORS VIEW ===== -->
+    <div x-show="currentView === 'competitors'" class="p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-2xl font-bold">Competitors</h2>
+        <span class="text-sm text-gray-500" x-text="`${competitors.total || 0} tracked`"></span>
+      </div>
+
+      <!-- Actions Row -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+        <!-- Auto-Discover -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3 text-orange-500">🔎 Auto-Discover (F12)</h3>
+          <div class="space-y-2 text-sm">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Max results</label>
+              <input type="number" x-model="discoverForm.max_results" min="5" max="100"
+                class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Session name (optional)</label>
+              <input type="text" x-model="discoverForm.session_name" placeholder="e.g. Monday Top 20"
+                class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Custom keywords (one per line)</label>
+              <textarea x-model="discoverForm.keywords" rows="2" placeholder="commercial donut fryer&#10;bakery equipment dealer"
+                class="w-full border rounded px-2 py-1 text-xs dark:bg-gray-700 dark:border-gray-600"></textarea>
+            </div>
+            <button @click="discoverCompetitors()" :disabled="discoverRunning"
+              class="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white py-2 rounded-lg text-sm font-medium transition">
+              <span x-text="discoverRunning ? '⏳ Discovering...' : '🔍 Discover Competitors'"></span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Bulk Import -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3 text-orange-500">📋 Bulk Import (F69)</h3>
+          <div class="space-y-2 text-sm">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Domains (one per line)</label>
+              <textarea x-model="bulkImportText" rows="4" placeholder="competitor1.com&#10;https://another-site.com&#10;bakery-store.net"
+                class="w-full border rounded px-2 py-1 text-xs font-mono dark:bg-gray-700 dark:border-gray-600"></textarea>
+            </div>
+            <input type="text" x-model="bulkImportSessionName" placeholder="Session name (optional)"
+              class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            <button @click="bulkImportCompetitors()"
+              class="w-full bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-lg text-sm font-medium transition">
+              📥 Import Competitors
+            </button>
+          </div>
+        </div>
+
+        <!-- Scan Controls -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3 text-orange-500">🔍 Scan Options (F17-F21)</h3>
+          <div class="space-y-2 text-sm">
+            <label class="flex items-center gap-2">
+              <input type="checkbox" x-model="competitorScanCriteria.use_model_number" class="w-4 h-4" />
+              Match by Model Number
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" x-model="competitorScanCriteria.use_manufacturer" class="w-4 h-4" />
+              Match by Manufacturer
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" x-model="competitorScanCriteria.use_title_fuzzy" class="w-4 h-4" />
+              Fuzzy Title Match
+            </label>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" x-model="competitorScanCriteria.use_price" class="w-4 h-4" />
+              Match by Price
+            </label>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Fuzzy threshold: <span x-text="competitorScanCriteria.fuzzy_threshold"></span>%</label>
+              <input type="range" min="50" max="95" step="5" x-model="competitorScanCriteria.fuzzy_threshold"
+                class="w-full" />
+            </div>
+            <label class="flex items-center gap-2">
+              <input type="checkbox" x-model="competitorScanForm.find_similar" class="w-4 h-4" />
+              Include similar products (F27)
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Competitor List -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
+        <div class="px-4 py-3 border-b border-gray-100 dark:border-gray-700 flex items-center justify-between">
+          <span class="font-semibold text-sm">Competitor Domains</span>
+          <button @click="scanCompetitors(competitors.competitors.map(c => c.id))"
+            class="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1.5 rounded text-xs font-medium">
+            ▶ Scan All
+          </button>
+        </div>
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 dark:bg-gray-700 text-gray-500 text-xs">
+            <tr>
+              <th class="text-left px-4 py-2">Domain</th>
+              <th class="text-center px-4 py-2 hidden md:table-cell">Matches</th>
+              <th class="text-left px-4 py-2 hidden lg:table-cell">Session</th>
+              <th class="text-left px-4 py-2 hidden lg:table-cell">Last Scanned</th>
+              <th class="px-4 py-2"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+            <template x-for="c in competitors.competitors" :key="c.id">
+              <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                <td class="px-4 py-2">
+                  <div class="font-medium" x-text="c.domain"></div>
+                  <div class="text-xs text-gray-400" x-text="c.name || ''"></div>
+                </td>
+                <td class="px-4 py-2 text-center hidden md:table-cell">
+                  <span class="bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full text-xs font-bold"
+                    x-text="c.total_matching_products || 0"></span>
+                </td>
+                <td class="px-4 py-2 text-xs text-gray-400 hidden lg:table-cell" x-text="c.scan_session_name || '—'"></td>
+                <td class="px-4 py-2 text-xs text-gray-400 hidden lg:table-cell" x-text="c.last_scanned_at ? new Date(c.last_scanned_at).toLocaleDateString() : 'Never'"></td>
+                <td class="px-4 py-2 text-right">
+                  <div class="flex gap-1 justify-end">
+                    <button @click="scanCompetitors([c.id])"
+                      class="text-xs bg-orange-100 hover:bg-orange-200 text-orange-700 px-2 py-1 rounded">Scan</button>
+                    <button @click="openCompetitor(c)"
+                      class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">Detail</button>
+                    <button @click="window.open(`/api/reports/competitor/${c.id}`, '_blank')"
+                      class="text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 px-2 py-1 rounded">Report</button>
+                  </div>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+        <div x-show="!competitors.competitors || competitors.competitors.length === 0" class="text-center py-8 text-gray-400 text-sm">
+          No competitors tracked yet. Use Auto-Discover or Bulk Import to add them.
+        </div>
+        <!-- Pagination -->
+        <div x-show="competitors.total > 50" class="flex justify-between items-center px-4 py-3 border-t dark:border-gray-700">
+          <button @click="loadCompetitors(competitorPage - 1)" :disabled="competitorPage <= 1"
+            class="px-3 py-1 rounded border text-sm disabled:opacity-40">← Prev</button>
+          <button @click="loadCompetitors(competitorPage + 1)" :disabled="competitorPage * 50 >= competitors.total"
+            class="px-3 py-1 rounded border text-sm disabled:opacity-40">Next →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== PRICE COMPARISON VIEW ===== -->
+    <div x-show="currentView === 'pricing'" class="p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-2xl font-bold">Price Comparison Matrix</h2>
+        <button @click="loadPriceMatrix(1)" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm">
+          🔄 Refresh
+        </button>
+      </div>
+
+      <div x-show="!priceMatrix.competitors || priceMatrix.competitors.length === 0" class="bg-white dark:bg-gray-800 rounded-xl shadow p-12 text-center text-gray-400">
+        <div class="text-4xl mb-3">💰</div>
+        <div class="font-semibold">No competitor prices yet</div>
+        <div class="text-sm mt-1">Run a competitor scan first to populate price data.</div>
+        <button @click="currentView='competitors'; $nextTick(() => {})" class="mt-4 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm">
+          Go to Competitors →
+        </button>
+      </div>
+
+      <div x-show="priceMatrix.competitors && priceMatrix.competitors.length > 0">
+        <div x-show="loadingMatrix" class="text-center py-8 text-gray-400">Loading price matrix...</div>
+        <div x-show="!loadingMatrix" class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-x-auto">
+          <table class="text-xs" style="min-width: max-content; width: 100%;">
+            <thead class="bg-gray-50 dark:bg-gray-700 text-gray-500">
+              <tr>
+                <th class="text-left px-3 py-2 sticky left-0 bg-gray-50 dark:bg-gray-700 min-w-48">Product</th>
+                <th class="text-right px-3 py-2 text-orange-600">Our Price</th>
+                <template x-for="comp in priceMatrix.competitors" :key="comp.id">
+                  <th class="text-right px-3 py-2" x-text="comp.domain.split('.')[0]"></th>
+                </template>
+                <th class="px-3 py-2"></th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+              <template x-for="row in priceMatrix.rows" :key="row.product_id">
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                  <td class="px-3 py-2 sticky left-0 bg-white dark:bg-gray-800">
+                    <div class="font-medium line-clamp-1 max-w-xs" x-text="row.title"></div>
+                  </td>
+                  <td class="px-3 py-2 text-right font-bold text-orange-600" x-text="fmtPrice(row.our_price)"></td>
+                  <template x-for="comp in priceMatrix.competitors" :key="comp.id">
+                    <td class="px-3 py-2 text-right">
+                      <template x-if="row.by_competitor[comp.domain]?.price">
+                        <div>
+                          <div :class="priceDiffClass(priceDiff(row.our_price, row.by_competitor[comp.domain].price))"
+                            x-text="fmtPrice(row.by_competitor[comp.domain].price)"></div>
+                          <div class="text-gray-400 text-xs"
+                            x-text="priceDiff(row.our_price, row.by_competitor[comp.domain].price) ? (priceDiff(row.our_price, row.by_competitor[comp.domain].price) > 0 ? '+' : '') + priceDiff(row.our_price, row.by_competitor[comp.domain].price) + '%' : ''">
+                          </div>
+                        </div>
+                      </template>
+                      <span x-show="!row.by_competitor[comp.domain]?.price" class="text-gray-300">—</span>
+                    </td>
+                  </template>
+                  <td class="px-3 py-2">
+                    <button @click="window.open(`/api/reports/price-comparison/${row.product_id}`, '_blank')"
+                      class="text-xs text-blue-500 hover:text-blue-700">Report</button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <!-- Pagination -->
+          <div class="flex items-center justify-between px-4 py-3 border-t dark:border-gray-700">
+            <span class="text-sm text-gray-500">
+              Page <span x-text="priceMatrix.page"></span> of <span x-text="priceMatrix.pages || 1"></span>
+              (<span x-text="priceMatrix.total"></span> products)
+            </span>
+            <div class="flex gap-2">
+              <button @click="loadPriceMatrix(priceMatrixPage - 1)" :disabled="priceMatrixPage <= 1"
+                class="px-3 py-1 rounded border text-sm disabled:opacity-40">← Prev</button>
+              <button @click="loadPriceMatrix(priceMatrixPage + 1)" :disabled="priceMatrixPage >= priceMatrix.pages"
+                class="px-3 py-1 rounded border text-sm disabled:opacity-40">Next →</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== SCHEDULER VIEW ===== -->
+    <div x-show="currentView === 'scheduler'" class="p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-2xl font-bold">Scheduler</h2>
+        <button @click="loadJobs()" class="text-sm text-gray-500 hover:text-orange-500">🔄 Refresh</button>
+      </div>
+
+      <!-- Create Job -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 mb-4">
+        <h3 class="font-semibold mb-3 text-orange-500">+ Create New Job</h3>
+        <div class="grid grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Job Name*</label>
+            <input type="text" x-model="newJob.name" placeholder="Daily Source Scan"
+              class="w-full border rounded px-2 py-1.5 dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Job Type*</label>
+            <select x-model="newJob.job_type" class="w-full border rounded px-2 py-1.5 dark:bg-gray-700 dark:border-gray-600">
+              <option value="source_scan">Source Scan</option>
+              <option value="competitor_scan">Competitor Scan</option>
+              <option value="price_check">Price Check (All Competitors)</option>
+              <option value="export">Export</option>
+              <option value="dedup">Deduplication</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Schedule Type*</label>
+            <select x-model="newJob.schedule_type" class="w-full border rounded px-2 py-1.5 dark:bg-gray-700 dark:border-gray-600">
+              <option value="daily">Daily (HH:MM)</option>
+              <option value="weekly">Weekly (day:HH:MM e.g. mon:09:00)</option>
+              <option value="monthly">Monthly (day:HH:MM e.g. 1:09:00)</option>
+              <option value="cron">Cron expression (5-part)</option>
+              <option value="interval_minutes">Every N minutes</option>
+              <option value="one_time">One-time (ISO datetime)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Schedule Value*</label>
+            <input type="text" x-model="newJob.schedule_value"
+              :placeholder="newJob.schedule_type === 'daily' ? '09:00' : newJob.schedule_type === 'cron' ? '0 9 * * 1' : newJob.schedule_type === 'interval_minutes' ? '60' : ''"
+              class="w-full border rounded px-2 py-1.5 font-mono dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Target (optional)</label>
+            <input type="text" x-model="newJob.target" placeholder="all_sources or competitor IDs JSON"
+              class="w-full border rounded px-2 py-1.5 dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+          <div class="flex items-end">
+            <button @click="createJob()"
+              class="w-full bg-orange-500 hover:bg-orange-600 text-white py-1.5 rounded-lg text-sm font-medium transition">
+              ⏰ Create Job
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Jobs List -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 dark:bg-gray-700 text-gray-500 text-xs">
+            <tr>
+              <th class="text-left px-4 py-2">Name</th>
+              <th class="text-left px-4 py-2">Type</th>
+              <th class="text-left px-4 py-2 hidden md:table-cell">Schedule</th>
+              <th class="text-left px-4 py-2 hidden lg:table-cell">Next Run</th>
+              <th class="text-left px-4 py-2 hidden lg:table-cell">Last Status</th>
+              <th class="text-center px-4 py-2">Runs</th>
+              <th class="px-4 py-2"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+            <template x-for="job in jobs" :key="job.id">
+              <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                <td class="px-4 py-2">
+                  <div class="font-medium" x-text="job.name"></div>
+                  <div class="text-xs text-gray-400" x-text="job.target || ''"></div>
+                </td>
+                <td class="px-4 py-2 text-xs">
+                  <span class="bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 px-1.5 py-0.5 rounded"
+                    x-text="job.job_type"></span>
+                </td>
+                <td class="px-4 py-2 text-xs font-mono text-gray-500 hidden md:table-cell">
+                  <span x-text="job.schedule_type + ': ' + job.schedule_value"></span>
+                </td>
+                <td class="px-4 py-2 text-xs text-gray-400 hidden lg:table-cell" x-text="job.next_run_at ? new Date(job.next_run_at).toLocaleString() : '—'"></td>
+                <td class="px-4 py-2 text-xs hidden lg:table-cell">
+                  <span :class="job.last_status === 'completed' ? 'text-green-600' : job.last_status?.startsWith('failed') ? 'text-red-500' : 'text-gray-400'"
+                    x-text="job.last_status || 'never run'"></span>
+                </td>
+                <td class="px-4 py-2 text-center text-gray-500" x-text="job.run_count"></td>
+                <td class="px-4 py-2">
+                  <div class="flex gap-1 justify-end">
+                    <button @click="runJobNow(job.id)" class="text-xs bg-orange-100 hover:bg-orange-200 text-orange-700 px-2 py-0.5 rounded">▶ Now</button>
+                    <button @click="toggleJob(job.id, !job.is_active)"
+                      :class="job.is_active ? 'bg-yellow-100 hover:bg-yellow-200 text-yellow-700' : 'bg-green-100 hover:bg-green-200 text-green-700'"
+                      class="text-xs px-2 py-0.5 rounded" x-text="job.is_active ? 'Pause' : 'Enable'"></button>
+                    <button @click="deleteJob(job.id)" class="text-xs bg-red-100 hover:bg-red-200 text-red-700 px-2 py-0.5 rounded">✕</button>
+                  </div>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+        <div x-show="!jobs || jobs.length === 0" class="text-center py-8 text-gray-400 text-sm">
+          No scheduled jobs. Create one above.
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== REPORTS VIEW ===== -->
+    <div x-show="currentView === 'reports'" class="p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-2xl font-bold">Reports</h2>
+      </div>
+
+      <!-- Report Controls -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 mb-4">
+        <div class="flex flex-wrap gap-3 items-end">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Report Type</label>
+            <select x-model="reportType" class="border rounded px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600">
+              <option value="summary">Platform Summary</option>
+              <option value="price_disparity">Price Disparity</option>
+              <option value="competitor">Competitor Intelligence</option>
+              <option value="price_comparison">Product Price Comparison</option>
+            </select>
+          </div>
+          <div x-show="reportType === 'summary'">
+            <label class="block text-xs text-gray-500 mb-1">Days back</label>
+            <input type="number" x-model="reportParams.days" min="1" max="365"
+              class="w-24 border rounded px-2 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+          <div x-show="reportType === 'price_disparity'">
+            <label class="block text-xs text-gray-500 mb-1">Min difference %</label>
+            <input type="number" x-model="reportParams.threshold" step="0.5" min="0"
+              class="w-24 border rounded px-2 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+          <div x-show="reportType === 'competitor'">
+            <label class="block text-xs text-gray-500 mb-1">Competitor ID</label>
+            <input type="number" x-model="reportParams.competitor_id"
+              class="w-32 border rounded px-2 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+          <div x-show="reportType === 'price_comparison'">
+            <label class="block text-xs text-gray-500 mb-1">Product ID</label>
+            <input type="number" x-model="reportParams.product_id"
+              class="w-32 border rounded px-2 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+          <button @click="loadReport()"
+            class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
+            📋 Generate Report
+          </button>
+          <button x-show="reportFrame"
+            @click="window.open('data:text/html,' + encodeURIComponent(reportFrame), '_blank')"
+            class="bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 px-4 py-2 rounded-lg text-sm">
+            ↗ Open in Tab
+          </button>
+        </div>
+      </div>
+
+      <!-- Report Frame -->
+      <div x-show="reportFrame" class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
+        <div class="w-full" style="height: 70vh; overflow-y: auto;" x-html="reportFrame"></div>
+      </div>
+      <div x-show="!reportFrame" class="bg-white dark:bg-gray-800 rounded-xl shadow p-12 text-center text-gray-400">
+        <div class="text-4xl mb-3">📋</div>
+        <div>Select a report type and click Generate Report.</div>
+      </div>
+    </div>
+
+    <!-- ===== EXPORT VIEW ===== -->
+    <div x-show="currentView === 'export'" class="p-6">
+      <h2 class="text-2xl font-bold mb-4">Export Data</h2>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+        <!-- Export Form -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3 text-orange-500">📤 Export Products</h3>
+          <div class="space-y-3 text-sm">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Format</label>
+              <select x-model="exportForm.fmt" class="w-full border rounded px-3 py-2 dark:bg-gray-700 dark:border-gray-600">
+                <option value="xlsx">Excel (.xlsx) — Multi-sheet with styles</option>
+                <option value="csv">CSV — Comma-separated</option>
+                <option value="txt">Plain text</option>
+              </select>
+            </div>
+            <div x-show="exportForm.fmt === 'xlsx'" class="space-y-2">
+              <label class="flex items-center gap-2">
+                <input type="checkbox" x-model="exportForm.include_competitors" class="w-4 h-4" />
+                Include Competitor Matches sheet
+              </label>
+              <label class="flex items-center gap-2">
+                <input type="checkbox" x-model="exportForm.include_price_history" class="w-4 h-4" />
+                Include Price History sheet
+              </label>
+            </div>
+            <button @click="doExport()"
+              class="w-full bg-green-500 hover:bg-green-600 text-white py-2 rounded-lg font-medium transition">
+              ⬇ Download Export
+            </button>
+          </div>
+        </div>
+
+        <!-- Quick Links -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3 text-orange-500">🔗 Quick Exports</h3>
+          <div class="space-y-2">
+            <a href="/api/export/products?fmt=csv" class="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition">
+              <span class="text-2xl">📄</span>
+              <div>
+                <div class="font-medium text-sm">Products CSV</div>
+                <div class="text-xs text-gray-400">All products, basic fields</div>
+              </div>
+            </a>
+            <button @click="doExport(); exportForm.fmt='xlsx'" class="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition w-full text-left">
+              <span class="text-2xl">📊</span>
+              <div>
+                <div class="font-medium text-sm">Full Excel Export</div>
+                <div class="text-xs text-gray-400">Products + Competitors + Price History</div>
+              </div>
+            </button>
+            <button @click="window.open('/api/reports/summary?days=7', '_blank')" class="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition w-full text-left">
+              <span class="text-2xl">📋</span>
+              <div>
+                <div class="font-medium text-sm">Weekly Summary Report</div>
+                <div class="text-xs text-gray-400">HTML report, opens in new tab</div>
+              </div>
+            </button>
+            <button @click="window.open('/api/reports/price-disparity', '_blank')" class="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition w-full text-left">
+              <span class="text-2xl">💰</span>
+              <div>
+                <div class="font-medium text-sm">Price Disparity Report</div>
+                <div class="text-xs text-gray-400">Competitors cheaper than us</div>
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Export History -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
+        <div class="px-4 py-3 border-b dark:border-gray-700 flex items-center justify-between">
+          <h3 class="font-semibold">Export History</h3>
+          <button @click="loadExportHistory()" class="text-xs text-gray-400 hover:text-orange-500">🔄 Refresh</button>
+        </div>
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 dark:bg-gray-700 text-gray-500 text-xs">
+            <tr>
+              <th class="text-left px-4 py-2">File</th>
+              <th class="text-left px-4 py-2">Type</th>
+              <th class="text-right px-4 py-2">Rows</th>
+              <th class="text-left px-4 py-2 hidden md:table-cell">Triggered By</th>
+              <th class="text-left px-4 py-2 hidden md:table-cell">Date</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+            <template x-for="r in exportHistory.records" :key="r.id">
+              <tr>
+                <td class="px-4 py-2 text-xs font-mono text-gray-600 dark:text-gray-400" x-text="r.filename"></td>
+                <td class="px-4 py-2 text-xs">
+                  <span class="bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded uppercase" x-text="r.export_type"></span>
+                </td>
+                <td class="px-4 py-2 text-right text-xs" x-text="r.row_count || '—'"></td>
+                <td class="px-4 py-2 text-xs text-gray-400 hidden md:table-cell" x-text="r.triggered_by"></td>
+                <td class="px-4 py-2 text-xs text-gray-400 hidden md:table-cell" x-text="r.created_at ? new Date(r.created_at).toLocaleString() : '—'"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+        <div x-show="!exportHistory.records || exportHistory.records.length === 0" class="text-center py-6 text-gray-400 text-sm">
+          No exports yet.
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== SETTINGS VIEW ===== -->
+    <div x-show="currentView === 'settings'" class="p-6">
+      <h2 class="text-2xl font-bold mb-6">Settings</h2>
+
+      <div class="space-y-4">
+        <!-- Database -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3 text-orange-500">🗄 Database</h3>
+          <div class="space-y-3">
+            <div>
+              <label class="text-sm font-medium block mb-1">Database Path</label>
+              <div class="text-xs text-gray-400 mb-1">Supports absolute paths including Google Drive. Changes require restart.</div>
+              <input :value="settingsData?.database?.path || ''"
+                @change="saveSetting(['database','path'], $event.target.value)"
+                class="w-full border rounded-lg px-3 py-2 text-sm font-mono dark:bg-gray-700 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+              <div class="mt-1 text-xs" x-text="`Example: /Users/yourname/Library/CloudStorage/GoogleDrive-you@gmail.com/My Drive/donut-intel/donut_intel.db`"
+                class="text-gray-400 font-mono"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Scraping -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3 text-orange-500">🔍 Scraping</h3>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-sm font-medium block mb-1">Delay Between Requests (seconds)</label>
+              <input type="number" step="0.5" min="0.5"
+                :value="settingsData?.scraping?.delay_between_requests || 2"
+                @change="saveSetting(['scraping','delay_between_requests'], parseFloat($event.target.value))"
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="text-sm font-medium block mb-1">Max Pages Per Site</label>
+              <input type="number" min="10"
+                :value="settingsData?.scraping?.max_pages_per_site || 200"
+                @change="saveSetting(['scraping','max_pages_per_site'], parseInt($event.target.value))"
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="text-sm font-medium block mb-1">Max Retries</label>
+              <input type="number" min="0" max="10"
+                :value="settingsData?.scraping?.max_retries || 3"
+                @change="saveSetting(['scraping','max_retries'], parseInt($event.target.value))"
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div class="flex items-center gap-2 mt-5">
+              <input type="checkbox" id="headless"
+                :checked="settingsData?.scraping?.headless !== false"
+                @change="saveSetting(['scraping','headless'], $event.target.checked)"
+                class="w-4 h-4" />
+              <label for="headless" class="text-sm">Headless browser (no visible window)</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Deduplication -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3 text-orange-500">🔁 Deduplication</h3>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-sm font-medium block mb-1">Auto-merge Threshold (%)</label>
+              <input type="number" min="50" max="100"
+                :value="settingsData?.deduplication?.auto_merge_threshold || 85"
+                @change="saveSetting(['deduplication','auto_merge_threshold'], parseInt($event.target.value))"
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="text-sm font-medium block mb-1">Manual Review Threshold (%)</label>
+              <input type="number" min="30" max="100"
+                :value="settingsData?.deduplication?.manual_review_threshold || 60"
+                @change="saveSetting(['deduplication','manual_review_threshold'], parseInt($event.target.value))"
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="text-sm font-medium block mb-1">Price Tolerance (%)</label>
+              <input type="number" step="0.5" min="0"
+                :value="settingsData?.deduplication?.price_tolerance_percent || 2"
+                @change="saveSetting(['deduplication','price_tolerance_percent'], parseFloat($event.target.value))"
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Auth -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3 text-orange-500">🔐 Authentication</h3>
+          <div class="text-sm text-gray-500 mb-3">Changes take effect on next login. Password is stored in settings.yaml — do not commit to source control.</div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-sm font-medium block mb-1">Username</label>
+              <input :value="settingsData?.auth?.username || 'admin'"
+                @change="saveSetting(['auth','username'], $event.target.value)"
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="text-sm font-medium block mb-1">Password</label>
+              <input type="password" placeholder="New password"
+                @change="saveSetting(['auth','password'], $event.target.value)"
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Webhooks (F72) -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3 text-orange-500">🔔 Webhooks (F72)</h3>
+          <div class="text-sm text-gray-500 mb-3">Send HTTP POST payloads to an external URL on specified events (Slack, Zapier, etc.)</div>
+          <div class="space-y-3">
+            <div>
+              <label class="text-sm font-medium block mb-1">Webhook URL</label>
+              <input type="url" x-model="webhookForm.url" placeholder="https://hooks.slack.com/..."
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="text-sm font-medium block mb-1">Events to send</label>
+              <div class="flex flex-wrap gap-2">
+                <template x-for="evt in ['price_alert','scan_complete','competitor_scan_complete','dedup_complete']">
+                  <label class="flex items-center gap-1 text-sm">
+                    <input type="checkbox" :value="evt"
+                      :checked="webhookForm.events.includes(evt)"
+                      @change="webhookForm.events.includes(evt) ? webhookForm.events.splice(webhookForm.events.indexOf(evt),1) : webhookForm.events.push(evt)"
+                      class="w-4 h-4" />
+                    <span x-text="evt"></span>
+                  </label>
+                </template>
+              </div>
+            </div>
+            <button @click="saveWebhook()" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
+              Save Webhook
+            </button>
+          </div>
+        </div>
+
+        <!-- AI (F64) -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3 text-orange-500">🤖 AI Categorization (F64)</h3>
+          <div class="text-sm text-gray-500 mb-3">Uses Anthropic Claude API to auto-categorize products into bakery supply categories.</div>
+          <div class="space-y-3">
+            <div>
+              <label class="text-sm font-medium block mb-1">Anthropic API Key</label>
+              <input type="password" placeholder="sk-ant-..."
+                @change="saveSetting(['ai','anthropic_api_key'], $event.target.value)"
+                class="w-full border rounded-lg px-3 py-2 text-sm font-mono dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <button @click="aiCategorize(productData.products.map(p => p.id))"
+              class="bg-purple-500 hover:bg-purple-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
+              🤖 Categorize Visible Products
+            </button>
+          </div>
+        </div>
+
+        <!-- Price Alerts (F25) -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3 text-orange-500">🚨 Price Alert Thresholds (F25)</h3>
+          <div class="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <label class="text-sm font-medium block mb-1">Outlier threshold (%)</label>
+              <input type="number" step="1" min="1"
+                :value="settingsData?.price_alerts?.outlier_threshold_pct || 15"
+                @change="saveSetting(['price_alerts','outlier_threshold_pct'], parseInt($event.target.value))"
+                class="w-full border rounded-lg px-3 py-2 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="text-sm font-medium block mb-1">Alert on price drop below (%)</label>
+              <input type="number" step="1" min="1"
+                :value="settingsData?.price_alerts?.alert_drop_pct || 10"
+                @change="saveSetting(['price_alerts','alert_drop_pct'], parseInt($event.target.value))"
+                class="w-full border rounded-lg px-3 py-2 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Product Detail Modal -->
+<div x-show="selectedProduct" class="fixed inset-0 bg-black/60 z-40 flex items-center justify-center p-4" @click.self="selectedProduct = null">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-2xl max-h-screen overflow-y-auto p-6" x-show="selectedProduct">
+    <div class="flex items-start justify-between mb-4">
+      <h3 class="text-lg font-bold pr-4" x-text="selectedProduct?.title"></h3>
+      <button @click="selectedProduct = null" class="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+    </div>
+    <div class="grid grid-cols-2 gap-4 mb-4">
+      <div>
+        <img x-show="selectedProduct?.primary_image" :src="selectedProduct?.primary_image"
+          class="w-full h-48 object-cover rounded-xl bg-gray-100" loading="lazy" @error="$el.style.display='none'" />
+      </div>
+      <div class="space-y-2 text-sm">
+        <div x-show="selectedProduct?.price" class="text-2xl font-bold text-green-600" x-text="'$' + (selectedProduct?.price || 0).toFixed(2)"></div>
+        <div x-show="selectedProduct?.manufacturer"><span class="text-gray-400">Manufacturer:</span> <span x-text="selectedProduct?.manufacturer"></span></div>
+        <div x-show="selectedProduct?.model_number"><span class="text-gray-400">Model:</span> <span class="font-mono" x-text="selectedProduct?.model_number"></span></div>
+        <div x-show="selectedProduct?.sku"><span class="text-gray-400">SKU:</span> <span class="font-mono" x-text="selectedProduct?.sku"></span></div>
+        <div x-show="selectedProduct?.category"><span class="text-gray-400">Category:</span> <span x-text="selectedProduct?.category"></span></div>
+        <div x-show="selectedProduct?.in_stock !== null">
+          <span :class="selectedProduct?.in_stock ? 'text-green-600' : 'text-red-600'" x-text="selectedProduct?.in_stock ? '✓ In Stock' : '✗ Out of Stock'"></span>
+        </div>
+      </div>
+    </div>
+    <div x-show="selectedProduct?.description" class="text-sm text-gray-600 dark:text-gray-400 mb-4 border-t pt-3">
+      <div class="font-semibold text-gray-700 dark:text-gray-300 mb-1">Description</div>
+      <p x-text="selectedProduct?.description" class="line-clamp-6"></p>
+    </div>
+    <div x-show="selectedProduct?.sources?.length" class="mb-3">
+      <div class="font-semibold text-sm mb-2">Source Listings</div>
+      <div class="space-y-1">
+        <template x-for="src in selectedProduct?.sources" :key="src.id">
+          <div class="flex items-center justify-between text-xs bg-gray-50 dark:bg-gray-700 rounded p-2">
+            <span class="font-medium text-blue-600" x-text="src.site"></span>
+            <span class="text-green-600 font-bold" x-text="src.price ? '$' + src.price.toFixed(2) : '—'"></span>
+            <a :href="src.url" target="_blank" class="text-gray-400 hover:text-orange-500 truncate max-w-xs">View ↗</a>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Price Comparison Button -->
+    <div class="flex gap-2 mt-3 pt-3 border-t dark:border-gray-700">
+      <button @click="loadPriceComparison(selectedProduct.id)"
+        class="flex-1 bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-lg text-sm font-medium">
+        💰 Price Comparison
+      </button>
+      <button @click="window.open('/api/reports/price-comparison/' + selectedProduct.id, '_blank')"
+        class="flex-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 py-2 rounded-lg text-sm">
+        📋 Full Report ↗
+      </button>
+      <button @click="aiCategorize([selectedProduct.id])"
+        class="flex-1 bg-purple-100 hover:bg-purple-200 text-purple-700 py-2 rounded-lg text-sm">
+        🤖 AI Categorize
+      </button>
+    </div>
+
+    <!-- Price Comparison Panel -->
+    <div x-show="priceComparison && priceComparison.product_id === selectedProduct?.id" class="mt-4 border-t pt-3">
+      <div x-show="loadingPriceComp" class="text-center py-4 text-gray-400 text-sm">Loading prices...</div>
+      <div x-show="!loadingPriceComp && priceComparison">
+        <div class="font-semibold text-sm mb-2">Price Rankings (cheapest first)</div>
+        <div class="space-y-1 max-h-48 overflow-y-auto">
+          <template x-for="(p, i) in priceComparison?.prices || []" :key="i">
+            <div class="flex items-center justify-between text-xs rounded p-1.5"
+              :class="p.is_outlier ? 'bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200' : 'bg-gray-50 dark:bg-gray-700'">
+              <div class="flex items-center gap-2">
+                <span class="text-gray-400" x-text="`#${i+1}`"></span>
+                <span class="font-medium" x-text="p.site"></span>
+                <span x-show="p.type === 'source'" class="bg-orange-100 text-orange-600 px-1 rounded text-xs">OUR SITE</span>
+                <span x-show="p.is_outlier" class="bg-yellow-100 text-yellow-700 px-1 rounded text-xs">OUTLIER</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="font-bold text-green-600" x-text="'$' + p.price.toFixed(2)"></span>
+                <a x-show="p.url" :href="p.url" target="_blank" class="text-gray-300 hover:text-orange-500">↗</a>
+              </div>
+            </div>
+          </template>
+          <div x-show="!priceComparison?.prices?.length" class="text-center text-gray-400 py-4">
+            No competitor prices found for this product.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Competitor Detail Modal -->
+<div x-show="competitorDetail" class="fixed inset-0 bg-black/60 z-40 flex items-center justify-center p-4" @click.self="competitorDetail = null">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-screen overflow-y-auto p-6">
+    <div class="flex items-start justify-between mb-4">
+      <div>
+        <h3 class="text-lg font-bold" x-text="competitorDetail?.domain"></h3>
+        <div class="text-sm text-gray-400" x-text="competitorDetail?.base_url"></div>
+      </div>
+      <button @click="competitorDetail = null" class="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid grid-cols-4 gap-3 mb-4">
+      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3 text-center">
+        <div class="text-xl font-bold text-orange-500" x-text="competitorDetail?.total_matching_products || 0"></div>
+        <div class="text-xs text-gray-400">Matches</div>
+      </div>
+      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3 text-center">
+        <div class="text-xl font-bold text-blue-500" x-text="competitorDetail?.scans?.length || 0"></div>
+        <div class="text-xs text-gray-400">Scans</div>
+      </div>
+      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3 text-center">
+        <div class="text-sm font-bold" x-text="competitorDetail?.first_scanned_at ? new Date(competitorDetail.first_scanned_at).toLocaleDateString() : 'Never'"></div>
+        <div class="text-xs text-gray-400">First Scanned</div>
+      </div>
+      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3 text-center">
+        <div class="text-sm font-bold" x-text="competitorDetail?.last_scanned_at ? new Date(competitorDetail.last_scanned_at).toLocaleDateString() : 'Never'"></div>
+        <div class="text-xs text-gray-400">Last Scanned</div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="flex gap-2 mb-4">
+      <button @click="scanCompetitors([competitorDetail.id])"
+        class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm">
+        ▶ Scan Now
+      </button>
+      <button @click="window.open('/api/reports/competitor/' + competitorDetail.id, '_blank')"
+        class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm">
+        📋 Full Report ↗
+      </button>
+      <button @click="deleteCompetitor(competitorDetail.id)"
+        class="bg-red-100 hover:bg-red-200 text-red-700 px-4 py-2 rounded-lg text-sm ml-auto">
+        Deactivate
+      </button>
+    </div>
+
+    <!-- Matched Products -->
+    <div class="font-semibold text-sm mb-2">Matched Products (<span x-text="competitorDetail?.matches?.length || 0"></span>)</div>
+    <div class="space-y-1 max-h-64 overflow-y-auto">
+      <template x-for="m in (competitorDetail?.matches || [])" :key="m.id">
+        <div class="flex items-center justify-between text-xs bg-gray-50 dark:bg-gray-700 rounded p-2">
+          <div class="flex-1 min-w-0">
+            <div class="font-medium truncate" x-text="m.title || 'Product #' + m.product_id"></div>
+            <div class="text-gray-400" x-text="m.match_type"></div>
+          </div>
+          <div class="ml-2 text-right">
+            <div class="font-bold text-green-600" x-text="m.price ? '$' + m.price.toFixed(2) : '—'"></div>
+            <div class="text-gray-400" x-text="m.confidence ? Math.round(m.confidence) + '%' : ''"></div>
+          </div>
+          <a x-show="m.url" :href="m.url" target="_blank" class="ml-2 text-gray-300 hover:text-orange-500">↗</a>
+        </div>
+      </template>
+      <div x-show="!competitorDetail?.matches?.length" class="text-center text-gray-400 py-4 text-sm">
+        No product matches found yet. Run a scan.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>

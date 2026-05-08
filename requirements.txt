@@ -1,0 +1,42 @@
+# Donut Intel Platform — Python dependencies
+# Python 3.11-3.13 compatible (pre-built wheels available for all packages)
+# Install: pip install -r requirements.txt
+
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+itsdangerous>=2.1.2          # SessionMiddleware
+
+# Database (SQLAlchemy 2.0.36+ ships greenlet 3.x which has Python 3.13 wheels)
+sqlalchemy>=2.0.36
+
+# Configuration
+pyyaml>=6.0.1
+
+# Scraping
+playwright>=1.44.0
+
+# Fuzzy matching (C++ backed, fast — 3.13 wheels available)
+rapidfuzz>=3.9.0
+
+# Pydantic (2.9+ has Python 3.13 wheels)
+pydantic>=2.9.0
+
+# Async support
+anyio>=4.6.0
+
+# LLM (F64 — AI categorization)
+anthropic>=0.40.0
+
+# Scheduling (F43-F47)
+apscheduler>=3.10.4
+
+# Export (F39-F42)
+openpyxl>=3.1.2
+
+# HTTP client (webhook dispatcher F72)
+httpx>=0.27.0
+
+# Utilities
+python-dateutil>=2.9.0

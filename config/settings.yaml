@@ -1,0 +1,121 @@
+app:
+  name: "Donut Intel Platform"
+  host: "0.0.0.0"
+  port: 8743
+  debug: false
+  secret_key: "CHANGE_ME_IN_PRODUCTION_USE_RANDOM_32_CHARS"
+
+database:
+  # Supports absolute paths including Google Drive:
+  # /Users/yourname/Library/CloudStorage/GoogleDrive-you@gmail.com/My Drive/donut-intel/donut_intel.db
+  path: "./data/donut_intel.db"
+
+scraping:
+  delay_between_requests: 2.0
+  max_retries: 3
+  timeout_seconds: 30
+  headless: true
+  user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  max_pages_per_site: 200
+  archive_html: false
+
+source_sites:
+  - name: "Donut Supplies"
+    domain: "donut-supplies.com"
+    base_url: "https://donut-supplies.com"
+    enabled: true
+  - name: "Donut Equipment"
+    domain: "donut-equipment.com"
+    base_url: "https://donut-equipment.com"
+    enabled: true
+  - name: "Bakery Wholesalers"
+    domain: "bakerywholesalers.com"
+    base_url: "https://bakerywholesalers.com"
+    enabled: true
+
+deduplication:
+  auto_merge_threshold: 85
+  manual_review_threshold: 60
+  price_weight: 40
+  model_number_weight: 35
+  manufacturer_weight: 15
+  title_weight: 20
+  description_weight: 10
+  price_tolerance_percent: 2.0
+
+email:
+  enabled: false
+  smtp_host: ""
+  smtp_port: 587
+  smtp_use_tls: true
+  smtp_user: ""
+  smtp_password: ""
+  from_address: ""
+  to_addresses: []
+
+anthropic:
+  api_key: ""
+  model: "claude-sonnet-4-20250514"
+  enabled: false
+
+exports:
+  output_directory: "./exports"
+  include_fields:
+    - title
+    - manufacturer
+    - model_number
+    - sku
+    - price_canonical
+    - category
+    - source_sites
+
+proxy:
+  enabled: false
+  host: ""
+  port: 0
+  username: ""
+  password: ""
+
+logging:
+  level: "INFO"
+  max_file_size_mb: 10
+  backup_count: 5
+  log_to_file: true
+  log_path: "./logs/donut_intel.log"
+
+auth:
+  enabled: true
+  username: "admin"
+  password: "changeme"
+  session_timeout_minutes: 60
+
+features:
+  f01_source_scraping: true
+  f02_paginated_scraping: true
+  f03_retry_handling: true
+  f04_raw_data_storage: true
+  f05_incremental_scraping: true
+  f06_deduplication: true
+  f07_confidence_scores: true
+  f08_configurable_thresholds: true
+  f09_dedup_log: true
+  f10_manual_dedup: true
+  f11_master_catalog: true
+  f31_https_dashboard: true
+  f32_dashboard_home: true
+  f33_full_feature_dashboard: true
+  f34_feature_toggles: true
+  f35_view_switching: true
+  f36_dark_mode: true
+  f37_responsive: true
+  f38_auth: true
+  f52_sqlite_db: true
+  f53_db_backup: true
+  f54_data_purge: true
+  f55_product_versioning: true
+  f56_ui_settings: true
+  f57_per_site_settings: true
+  f59_logging: true
+  f64_ai_categorization: false
+  f71_notes_tags: true
+  f73_cli: true

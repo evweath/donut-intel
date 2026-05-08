@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# SSL certs (generated locally)
+certs/*.pem
+
+# Database and WAL files
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Logs and exports
+logs/*.log
+exports/
+
+# macOS
+.DS_Store

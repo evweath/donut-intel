@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.donutintel.app</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/ew/Downloads/productComparison/donut-intel/.venv/bin/python</string>
+    <string>-m</string>
+    <string>uvicorn</string>
+    <string>backend.app:app</string>
+    <string>--host</string>
+    <string>0.0.0.0</string>
+    <string>--port</string>
+    <string>8743</string>
+    <string>--ssl-certfile</string>
+    <string>/Users/ew/Downloads/productComparison/donut-intel/certs/cert.pem</string>
+    <string>--ssl-keyfile</string>
+    <string>/Users/ew/Downloads/productComparison/donut-intel/certs/key.pem</string>
+    <string>--log-level</string>
+    <string>warning</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/ew/Downloads/productComparison/donut-intel</string>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/ew/Downloads/productComparison/donut-intel/logs/launchd_stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/ew/Downloads/productComparison/donut-intel/logs/launchd_stderr.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>
