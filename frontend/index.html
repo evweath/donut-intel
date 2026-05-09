@@ -96,6 +96,49 @@
         </button>
       </div>
 
+      <!-- Quick Actions -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 mb-6">
+        <h3 class="font-semibold mb-3">Quick Actions</h3>
+        <div class="flex flex-wrap gap-3">
+          <button @click="startScan()" :disabled="scanRunning"
+            class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition"
+            style="opacity: 1" :style="scanRunning ? 'opacity:0.6;cursor:not-allowed' : ''">
+            <span x-text="scanRunning ? '⏳ Scanning...' : '🔍 Scan All Sources'"></span>
+          </button>
+          <button @click="runDedup()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+            🔁 Run Deduplication
+          </button>
+          <button @click="currentView='products'; loadProducts(1)" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 px-4 py-2 rounded-lg text-sm font-medium transition">
+            📦 View Products
+          </button>
+          <button @click="currentView='competitors'; loadCompetitors(1)" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 px-4 py-2 rounded-lg text-sm font-medium transition">
+            🏪 Competitors
+          </button>
+          <button @click="currentView='pricing'; loadPriceMatrix(1)" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 px-4 py-2 rounded-lg text-sm font-medium transition">
+            💰 Price Matrix
+          </button>
+          <button @click="currentView='export'" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+            📤 Export
+          </button>
+        </div>
+
+        <!-- Scan Progress -->
+        <div x-show="scanRunning" class="mt-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg p-3">
+          <div class="flex items-center gap-2 mb-2">
+            <div class="animate-spin text-orange-500">⏳</div>
+            <span class="font-medium text-sm" x-text="scanStatus.message || 'Scanning...'"></span>
+          </div>
+          <div x-show="scanStatus.current && scanStatus.total" class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+            <div class="bg-orange-500 h-2 rounded-full transition-all"
+              :style="`width: ${Math.round(scanStatus.current / scanStatus.total * 100)}%`">
+            </div>
+          </div>
+          <div class="text-xs text-gray-500 mt-1" x-show="scanStatus.current">
+            <span x-text="scanStatus.current"></span> / <span x-text="scanStatus.total"></span> products
+          </div>
+        </div>
+      </div>
+
       <!-- Stats Cards -->
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
@@ -160,48 +203,6 @@
               <div>Size: <span x-text="stats.db?.size_mb + ' MB'"></span></div>
               <div x-show="stats.db?.on_network_drive" class="text-yellow-600 font-semibold">⚠ Network drive — WAL mode active</div>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Quick Actions -->
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
-        <h3 class="font-semibold mb-3">Quick Actions</h3>
-        <div class="flex flex-wrap gap-3">
-          <button @click="startScan()" :disabled="scanRunning"
-            class="bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
-            <span x-text="scanRunning ? '⏳ Scanning...' : '🔍 Scan All Sources'"></span>
-          </button>
-          <button @click="runDedup()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
-            🔁 Run Deduplication
-          </button>
-              <button @click="currentView='products'; loadProducts(1)" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 px-4 py-2 rounded-lg text-sm font-medium transition">
-            📦 View Products
-          </button>
-          <button @click="currentView='competitors'; loadCompetitors(1)" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 px-4 py-2 rounded-lg text-sm font-medium transition">
-            🏪 Competitors
-          </button>
-          <button @click="currentView='pricing'; loadPriceMatrix(1)" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 px-4 py-2 rounded-lg text-sm font-medium transition">
-            💰 Price Matrix
-          </button>
-          <button @click="currentView='export'" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
-            📤 Export
-          </button>
-        </div>
-
-        <!-- Scan Progress -->
-        <div x-show="scanRunning" class="mt-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg p-3">
-          <div class="flex items-center gap-2 mb-2">
-            <div class="animate-spin text-orange-500">⏳</div>
-            <span class="font-medium text-sm" x-text="scanStatus.message || 'Scanning...'"></span>
-          </div>
-          <div x-show="scanStatus.current && scanStatus.total" class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-            <div class="bg-orange-500 h-2 rounded-full transition-all"
-              :style="`width: ${Math.round(scanStatus.current / scanStatus.total * 100)}%`">
-            </div>
-          </div>
-          <div class="text-xs text-gray-500 mt-1" x-show="scanStatus.current">
-            <span x-text="scanStatus.current"></span> / <span x-text="scanStatus.total"></span> products
           </div>
         </div>
       </div>

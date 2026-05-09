@@ -277,7 +277,11 @@ function app() {
       try {
         this.scanSessions = await this.api('/api/scan/sessions?per_page=20') || { sessions: [] };
         const running = (this.scanSessions.sessions || []).find(s => s.status === 'running');
-        if (!running && this.scanRunning) {
+        if (running && !this.scanRunning) {
+          this.scanRunning = true;
+          this.activeScanId = running.id;
+          this.scanStatus = { message: 'Scan in progress...' };
+        } else if (!running && this.scanRunning) {
           this.scanRunning = false;
           this.scanStatus = {};
           await this.loadStats();

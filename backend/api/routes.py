@@ -352,12 +352,14 @@ async def start_source_scan(req: StartScanRequest, db: Session = Depends(get_db_
     db.commit()
 
     async def do_scan():
+        from backend.app import capture_error
         async def ws_progress(event: str, data: dict):
             await manager.broadcast({"event": event, "session_id": session_id, **data})
         try:
             await run_source_scan(scan_session_id=session_id, site_filter=req.site_filter, progress_callbacks=[ws_progress])
             await manager.broadcast({"event": "scan_complete", "session_id": session_id})
         except Exception as exc:
+            capture_error(exc, context=f"source_scan session={session_id}")
             await manager.broadcast({"event": "scan_error", "session_id": session_id, "error": str(exc)})
         finally:
             _active_scans.pop(session_id, None)

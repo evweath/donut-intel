@@ -3,10 +3,13 @@ Donut Intel Platform — Main FastAPI application.
 HTTPS via self-signed cert (F31), session auth (F38), static frontend serving.
 Scheduler (F43), Webhooks (F72) wired at startup.
 """
+import json
 import logging
 import logging.handlers
 import os
 import sys
+import traceback
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request, HTTPException
@@ -63,6 +66,24 @@ def setup_logging():
 setup_logging()
 logger = logging.getLogger(__name__)
 
+ERROR_LOG = Path(__file__).parent.parent / "logs" / "errors.jsonl"
+
+def capture_error(exc: BaseException, context: str = "") -> None:
+    """Append a structured error record to logs/errors.jsonl."""
+    try:
+        ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": datetime.utcnow().isoformat(),
+            "context": context,
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+        with ERROR_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception:
+        pass
+
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
@@ -78,11 +99,11 @@ app = FastAPI(
     redoc_url="/api/redoc",
 )
 
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=config.get("app", "secret_key", default="CHANGE_ME_PLEASE"),
-    max_age=config.get("auth", "session_timeout_minutes", default=60) * 60,
-)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    capture_error(exc, context=f"{request.method} {request.url.path}")
+    logger.error(f"Unhandled exception on {request.method} {request.url.path}: {exc}", exc_info=True)
+    return JSONResponse({"detail": "Internal server error"}, status_code=500)
 
 app.add_middleware(
     CORSMiddleware,
@@ -123,6 +144,13 @@ async def auth_middleware(request: Request, call_next):
         if path.startswith("/api/"):
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
     return await call_next(request)
+
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=config.get("app", "secret_key", default="CHANGE_ME_PLEASE"),
+    max_age=config.get("auth", "session_timeout_minutes", default=60) * 60,
+)
 
 
 # ---------------------------------------------------------------------------

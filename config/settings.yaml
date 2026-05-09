@@ -11,12 +11,14 @@ database:
   path: "./data/donut_intel.db"
 
 scraping:
-  delay_between_requests: 2.0
-  max_retries: 3
-  timeout_seconds: 30
+  delay_between_requests: 5.0
+  max_retries: 2
+  timeout_seconds: 20
   headless: true
+  circuit_breaker_threshold: 10
+  circuit_breaker_pause_seconds: 300
   user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-  max_pages_per_site: 200
+  max_pages_per_site: 500
   archive_html: false
 
 source_sites:

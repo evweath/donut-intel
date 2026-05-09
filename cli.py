@@ -158,6 +158,8 @@ def cmd_stats(args):
         total_competitors = db.query(func.count(Competitor.id)).filter(Competitor.is_active == True).scalar()
         total_matches = db.query(func.count(CompetitorProductMatch.id)).filter(CompetitorProductMatch.is_active == True).scalar()
         last_scan = db.query(ScanSession).order_by(ScanSession.started_at.desc()).first()
+        last_scan_status = last_scan.status if last_scan else None
+        last_scan_started = last_scan.started_at.isoformat() if last_scan and last_scan.started_at else None
         site_counts = (
             db.query(ProductSource.source_site, func.count(ProductSource.id))
             .filter(ProductSource.is_active == True)
@@ -176,7 +178,7 @@ def cmd_stats(args):
     print(f"\n  Products by Site:")
     for site, count in site_counts:
         print(f"    {site:<30} {count}")
-    print(f"\n  Last Scan: {last_scan.status if last_scan else 'None'}")
+    print(f"\n  Last Scan: {last_scan_status or 'None'} {('(' + last_scan_started + ')') if last_scan_started else ''}")
     print(f"\n  DB Path:   {health['path']}")
     print(f"  DB Size:   {health['size_mb']} MB")
     print(f"  WAL Mode:  {health['wal_mode']}")

@@ -155,6 +155,10 @@ class BaseScraper:
         self._playwright = None
         self._browser: Optional[Browser] = None
         self._context: Optional[BrowserContext] = None
+        self._consecutive_failures: int = 0
+        self._circuit_breaker_threshold: int = config.get("scraping", "circuit_breaker_threshold", default=10)
+        self._circuit_breaker_pause: int = config.get("scraping", "circuit_breaker_pause_seconds", default=300)
+        self._context_error_count: int = 0
 
     async def __aenter__(self) -> "BaseScraper":
         await self.start()
@@ -204,26 +208,79 @@ class BaseScraper:
             except Exception:
                 pass
 
+    _CONTEXT_ERRORS = ("ERR_INVALID_HANDLE", "ERR_SOCKET_NOT_CONNECTED", "Target page, context or browser has been closed")
+
+    async def _reset_browser(self) -> None:
+        """Full Playwright + Chromium restart when the browser process is unrecoverable."""
+        logger.warning("Full browser restart — tearing down Playwright and Chromium...")
+        await self.stop()
+        await asyncio.sleep(2)
+        logger.info("Launching fresh Playwright browser instance...")
+        await self.start()
+        self._context_error_count = 0
+        logger.info("Browser restarted successfully.")
+
+    async def _reset_context(self) -> None:
+        """Rebuild the browser context. Escalates to full browser restart after 2 consecutive failures."""
+        self._context_error_count += 1
+        if self._context_error_count >= 2:
+            logger.warning(f"Context rebuild failed {self._context_error_count} times — escalating to full browser restart")
+            await self._reset_browser()
+            return
+        logger.warning("Browser context is broken — rebuilding context...")
+        try:
+            if self._context:
+                await self._context.close()
+        except Exception:
+            pass
+        self._context = await self._browser.new_context(
+            user_agent=self.user_agent,
+            viewport={"width": 1280, "height": 800},
+            ignore_https_errors=True,
+            java_script_enabled=True,
+        )
+        self._context.set_default_timeout(self.timeout_ms)
+        logger.info("Browser context rebuilt successfully.")
+
     async def _new_page(self) -> Page:
         return await self._context.new_page()
 
     async def _fetch_page(self, url: str, retry: int = 0) -> Optional[Tuple[Page, str]]:
-        page = await self._new_page()
+        if self._consecutive_failures >= self._circuit_breaker_threshold:
+            logger.warning(
+                f"Circuit breaker: {self._consecutive_failures} consecutive failures. "
+                f"Pausing {self._circuit_breaker_pause}s to let rate limit reset..."
+            )
+            self._consecutive_failures = 0
+            await asyncio.sleep(self._circuit_breaker_pause)
+
+        page = None
         try:
+            page = await self._new_page()
             await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
-            # Brief wait for JS-rendered content
             await asyncio.sleep(min(1.5, self.delay))
             html = await page.content()
             await asyncio.sleep(max(0, self.delay - 1.5))
+            self._consecutive_failures = 0
+            self._context_error_count = 0
             return page, html
         except Exception as exc:
-            await page.close()
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+            exc_str = str(exc)
+            if any(e in exc_str for e in self._CONTEXT_ERRORS):
+                logger.warning(f"Context error on {url}: {exc_str} — resetting browser")
+                await self._reset_context()
             if retry < self.max_retries:
                 wait = self.delay * (retry + 2)
                 logger.warning(f"Retry {retry + 1}/{self.max_retries} for {url}: {exc}")
                 await asyncio.sleep(wait)
                 return await self._fetch_page(url, retry + 1)
             logger.error(f"Failed {url} after {self.max_retries} retries: {exc}")
+            self._consecutive_failures += 1
             return None
 
     # -----------------------------------------------------------------
