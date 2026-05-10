@@ -1,29 +1,26 @@
-# Session State — 2026-05-10T13:45:00-05:00
+# Session State — 2026-05-10T13:50:00-05:00
 
 ## Accomplished This Session
-- Added `## Session Continuity` rules to `~/.claude/CLAUDE.md` so all future sessions auto-read/write this file
-- Created this `.claude/SESSION.md` bootstrapped from git history
+- Added `## Session Continuity` section to `~/.claude/CLAUDE.md` — rules for reading SESSION.md at startup and writing it before exit
+- Created `.claude/SESSION.md` (this file) in the project directory for per-project session continuity
+- Confirmed SESSION.md is committed to git automatically by the existing Stop hook (`git add -A && git commit`)
+- SESSION.md was auto-committed at 13:39 by the Stop hook (commit `27a9833`)
 
-## Prior Session Work (from git log, most recent first)
-- **Session 9806ebb (May 10 13:32)**: Added `backend/tasks/manager.py` (async task manager with dependency tracking), wired it to the WebSocket broadcast manager in `backend/api/routes.py:70-72`, and added `/api/tasks` endpoint (`routes.py:972-974`)
-- **Session 381eb64 (May 10 13:01)**: Added `frontend/js/app.js` (97 lines), expanded `frontend/index.html`, added `sku` field to dedup candidate list response (`routes.py:459,465`), added scan cycle state machine routes (CYCLE_KEY pattern in `routes.py`)
-- **Sessions before that**: Set up Phase 2 of the platform — scraping, dedup, competitors, price comparison, scheduler, export, reports, AI categorization, webhooks, bulk import (all in `routes.py`)
-
-## In Progress / Unknown
-- No uncommitted changes at session start — clean working tree
-- It is unclear what specific feature or bug was being worked on just before the last backup; the commit messages are generic ("Claude session backup")
+## In Progress
+- Nothing — session continuity system is fully set up and working; user asked to start a new session to test it
 
 ## Next Steps
-- **Ask the user what they want to continue** — the session backup messages don't carry intent
-- Likely candidates based on recent code:
-  - Further frontend work in `frontend/js/app.js` or `frontend/index.html`
-  - Testing or debugging the async task manager (`backend/tasks/manager.py`)
-  - Scan cycle state machine logic (`routes.py` ~980+)
+- **This is a test** — the user started a fresh session to verify that Claude reads this file at startup and orients itself correctly
+- After confirming the system works, resume whatever feature work was previously underway on the Donut Intel Platform
+- Likely next work areas based on recent commits: frontend (`frontend/js/app.js`, `frontend/index.html`) or scan cycle state machine (`backend/api/routes.py` ~969+)
 
 ## Key Context
-- Stack: FastAPI backend + vanilla JS frontend, SQLAlchemy ORM, SQLite (likely)
-- `backend/api/routes.py` is the monolithic route file (~1180 lines) — all API endpoints live here
-- `backend/tasks/manager.py` is the async task manager; singleton `task_manager` is imported into routes
-- WebSocket broadcast is at `/ws/scan-progress`; `ConnectionManager` at `routes.py:68`
-- `.claude/settings.local.json` exists in project root (project-level Claude settings)
-- Session backups auto-run via Stop hook → git commit + rsync to `~/.claude_home/donut-intel/`
+- **Stack**: FastAPI + vanilla JS frontend, SQLAlchemy ORM, Python 3.13, `.venv/`
+- **Server**: runs on port 8742 (`./start.sh` / `./stop.sh`)
+- **Main route file**: `backend/api/routes.py` (~1180 lines) — all API endpoints
+- **Async task manager**: `backend/tasks/manager.py` — singleton `task_manager` imported into routes at line 70
+- **WebSocket**: `/ws/scan-progress`, `ConnectionManager` at `routes.py:68`
+- **Dedup engine**: `backend/dedup/engine.py` → `DeduplicationEngine`
+- **Session backup**: Stop hook auto-runs `git add -A && git commit` + rsync to `~/.claude_home/donut-intel/`
+- **Project-level Claude settings**: `.claude/settings.local.json` (permission allowlist, not secrets)
+- `.claude/SESSION.md` is tracked in git — committed on every session end
