@@ -324,6 +324,57 @@ function app() {
       } catch (e) { this.toast('Failed to resolve: ' + e.message, 'error'); }
     },
 
+    // Returns an array of comparison rows for the duplicate card.
+    // Each row: { label, primary, secondary, score, mono }
+    dupFields(dup) {
+      const r = dup.match_reasons || {};
+      const p = dup.primary;
+      const s = dup.secondary;
+      const fp = v => v != null ? '$' + Number(v).toFixed(2) : '—';
+      return [
+        { label: 'Title',        primary: p.title        || '—', secondary: s.title        || '—', score: r.title_fuzzy,   mono: false },
+        { label: 'Price',        primary: fp(p.price),           secondary: fp(s.price),           score: r.price,         mono: false },
+        { label: 'Manufacturer', primary: p.manufacturer  || '—', secondary: s.manufacturer  || '—', score: r.manufacturer, mono: false },
+        { label: 'Model #',      primary: p.model_number  || '—', secondary: s.model_number  || '—', score: r.model_number, mono: true  },
+        { label: 'SKU',          primary: p.sku            || '—', secondary: s.sku            || '—', score: r.sku,          mono: true  },
+        { label: 'Sources',      primary: (p.sources||[]).join(', ')||'—', secondary: (s.sources||[]).join(', ')||'—', score: null, mono: false },
+      ];
+    },
+
+    // Row background class based on match score.
+    dupRowClass(score, hasBoth) {
+      if (score === null || score === undefined) return 'bg-blue-50 dark:bg-blue-900/20';
+      if (!hasBoth) return 'bg-gray-50 dark:bg-gray-700/30';
+      if (score >= 80) return 'bg-green-50 dark:bg-green-900/20';
+      if (score >= 40) return 'bg-yellow-50 dark:bg-yellow-900/20';
+      return 'bg-red-50 dark:bg-red-900/20';
+    },
+
+    // One-line explanation of why the confidence score is what it is.
+    dupSummary(dup) {
+      const r = dup.match_reasons || {};
+      if (r.disqualifier === 'model_number_mismatch')
+        return 'Model numbers present but conflict — score capped at 5%.';
+      if (r.disqualifier === 'sku_mismatch')
+        return 'SKUs present but conflict — score capped at 5%.';
+      const factors = [
+        { name: 'model number', score: r.model_number  || 0 },
+        { name: 'price',        score: r.price         || 0 },
+        { name: 'manufacturer', score: r.manufacturer  || 0 },
+        { name: 'title',        score: r.title_fuzzy   || 0 },
+        { name: 'description',  score: r.description   || 0 },
+      ].filter(f => f.score > 0).sort((a, b) => b.score - a.score);
+      if (!factors.length) return 'No matching signals found.';
+      const top = factors.slice(0, 2).map(f => `${f.name} (${Math.round(f.score)}%)`);
+      const missing = [
+        r.model_number === 0 && dup.primary.model_number && dup.secondary.model_number ? 'model mismatch' : null,
+        r.price        === 0 && dup.primary.price        && dup.secondary.price        ? 'price gap'      : null,
+      ].filter(Boolean);
+      let note = 'Driven by ' + top.join(' and ') + '.';
+      if (missing.length) note += ' Limited by ' + missing.join(', ') + '.';
+      return note;
+    },
+
     // -----------------------------------------------------------------------
     // Competitors (F12-F21)
     // -----------------------------------------------------------------------

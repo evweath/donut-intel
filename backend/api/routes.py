@@ -453,10 +453,12 @@ def list_duplicate_candidates(status: str = "pending", page: int = 1, per_page: 
             "match_reasons": json.loads(c.match_reasons_json) if c.match_reasons_json else {},
             "primary": {"id": primary.id, "title": primary.canonical_title, "price": primary.price_canonical,
                         "manufacturer": primary.manufacturer, "model_number": primary.model_number,
+                        "sku": primary.sku,
                         "sources": [s.source_site for s in primary.sources if s.is_active],
                         "image": next((img.source_url for img in primary.images if img.is_primary), None)},
             "secondary": {"id": secondary.id, "title": secondary.canonical_title, "price": secondary.price_canonical,
                           "manufacturer": secondary.manufacturer, "model_number": secondary.model_number,
+                          "sku": secondary.sku,
                           "sources": [s.source_site for s in secondary.sources if s.is_active],
                           "image": next((img.source_url for img in secondary.images if img.is_primary), None)},
         })
