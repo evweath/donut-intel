@@ -59,7 +59,11 @@ function app() {
     competitors: { competitors: [], total: 0 },
     competitorPage: 1,
     competitorSearch: '',
-    discoverForm: { max_results: 20, keywords: '', session_name: '' },
+    discoverForm: { max_results: 20, session_name: '' },
+    discoverKeywords: ['commercial donut fryer', 'bakery equipment dealer', 'donut equipment wholesale'],
+    newKeyword: '',
+    keywordEditIndex: -1,
+    keywordEditText: '',
     bulkImportText: '',
     bulkImportSessionName: '',
     competitorScanForm: { ids: [], session_name: '', find_similar: false, max_pages: 100, criteria: {} },
@@ -69,6 +73,8 @@ function app() {
     },
     competitorDetail: null,
     discoverRunning: false,
+    competitorEditId: null,
+    competitorEditForm: { name: '', base_url: '' },
 
     // Pricing matrix
     priceMatrix: { rows: [], competitors: [], total: 0, page: 1, pages: 1 },
@@ -334,7 +340,7 @@ function app() {
         const body = {
           max_results: this.discoverForm.max_results,
           session_name: this.discoverForm.session_name || undefined,
-          custom_keywords: this.discoverForm.keywords ? this.discoverForm.keywords.split('\n').map(k => k.trim()).filter(Boolean) : undefined,
+          custom_keywords: this.discoverKeywords.length ? this.discoverKeywords : undefined,
         };
         await this.api('/api/competitors/discover', { method: 'POST', body: JSON.stringify(body) });
         this.toast('Competitor discovery started...', 'info');
@@ -342,6 +348,34 @@ function app() {
         this.discoverRunning = false;
         this.toast('Discovery failed: ' + e.message, 'error');
       }
+    },
+
+    addKeyword() {
+      const kw = this.newKeyword.trim();
+      if (!kw || this.discoverKeywords.includes(kw)) return;
+      this.discoverKeywords.push(kw);
+      this.newKeyword = '';
+    },
+
+    removeKeyword(i) {
+      this.discoverKeywords.splice(i, 1);
+    },
+
+    startEditKeyword(i) {
+      this.keywordEditIndex = i;
+      this.keywordEditText = this.discoverKeywords[i];
+    },
+
+    saveKeyword() {
+      const kw = this.keywordEditText.trim();
+      if (kw) this.discoverKeywords[this.keywordEditIndex] = kw;
+      this.keywordEditIndex = -1;
+      this.keywordEditText = '';
+    },
+
+    cancelKeywordEdit() {
+      this.keywordEditIndex = -1;
+      this.keywordEditText = '';
     },
 
     async bulkImportCompetitors() {
@@ -383,9 +417,32 @@ function app() {
       try {
         await this.api(`/api/competitors/${id}`, { method: 'DELETE' });
         this.toast('Competitor deactivated', 'success');
+        this.competitorEditId = null;
         await this.loadCompetitors();
         this.competitorDetail = null;
       } catch (e) { this.toast('Failed to delete: ' + e.message, 'error'); }
+    },
+
+    startEditCompetitor(c) {
+      this.competitorEditId = c.id;
+      this.competitorEditForm = { name: c.name || '', base_url: c.base_url || '' };
+    },
+
+    cancelEditCompetitor() {
+      this.competitorEditId = null;
+      this.competitorEditForm = { name: '', base_url: '' };
+    },
+
+    async saveCompetitor() {
+      try {
+        await this.api(`/api/competitors/${this.competitorEditId}`, {
+          method: 'PUT',
+          body: JSON.stringify(this.competitorEditForm),
+        });
+        this.toast('Competitor updated', 'success');
+        this.competitorEditId = null;
+        await this.loadCompetitors();
+      } catch (e) { this.toast('Update failed: ' + e.message, 'error'); }
     },
 
     // -----------------------------------------------------------------------

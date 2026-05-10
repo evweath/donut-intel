@@ -480,9 +480,33 @@
                 class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
             </div>
             <div>
-              <label class="block text-xs text-gray-500 mb-1">Custom keywords (one per line)</label>
-              <textarea x-model="discoverForm.keywords" rows="2" placeholder="commercial donut fryer&#10;bakery equipment dealer"
-                class="w-full border rounded px-2 py-1 text-xs dark:bg-gray-700 dark:border-gray-600"></textarea>
+              <label class="block text-xs text-gray-500 mb-1">Custom keywords</label>
+              <div class="space-y-1 mb-1 max-h-32 overflow-y-auto">
+                <template x-for="(kw, i) in discoverKeywords" :key="i">
+                  <div class="flex items-center gap-1">
+                    <template x-if="keywordEditIndex !== i">
+                      <div class="flex items-center gap-1 w-full">
+                        <span class="flex-1 text-xs bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 px-2 py-0.5 rounded truncate" x-text="kw"></span>
+                        <button @click="startEditKeyword(i)" class="text-blue-500 hover:text-blue-700 text-xs px-1 flex-shrink-0" title="Edit">✏</button>
+                        <button @click="removeKeyword(i)" class="text-red-500 hover:text-red-700 text-xs px-1 flex-shrink-0" title="Delete">✕</button>
+                      </div>
+                    </template>
+                    <template x-if="keywordEditIndex === i">
+                      <div class="flex items-center gap-1 w-full">
+                        <input x-model="keywordEditText" @keyup.enter="saveKeyword()" @keyup.escape="cancelKeywordEdit()"
+                          class="flex-1 text-xs border rounded px-2 py-0.5 dark:bg-gray-600 dark:border-gray-500" />
+                        <button @click="saveKeyword()" class="text-green-600 hover:text-green-800 text-xs px-1 flex-shrink-0 font-bold" title="Save">✓</button>
+                        <button @click="cancelKeywordEdit()" class="text-gray-500 hover:text-gray-700 text-xs px-1 flex-shrink-0" title="Cancel">✕</button>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+              </div>
+              <div class="flex gap-1">
+                <input x-model="newKeyword" @keyup.enter="addKeyword()" placeholder="Add keyword..."
+                  class="flex-1 text-xs border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+                <button @click="addKeyword()" class="text-xs bg-gray-200 hover:bg-gray-300 dark:bg-gray-600 dark:hover:bg-gray-500 px-2 py-1 rounded font-bold">+</button>
+              </div>
             </div>
             <button @click="discoverCompetitors()" :disabled="discoverRunning"
               class="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white py-2 rounded-lg text-sm font-medium transition">
@@ -561,9 +585,10 @@
               <th class="px-4 py-2"></th>
             </tr>
           </thead>
-          <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
-            <template x-for="c in competitors.competitors" :key="c.id">
-              <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+          <template x-for="c in competitors.competitors" :key="c.id">
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+              <!-- Normal row -->
+              <tr x-show="competitorEditId !== c.id" class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
                 <td class="px-4 py-2">
                   <div class="font-medium" x-text="c.domain"></div>
                   <div class="text-xs text-gray-400" x-text="c.name || ''"></div>
@@ -580,13 +605,33 @@
                       class="text-xs bg-orange-100 hover:bg-orange-200 text-orange-700 px-2 py-1 rounded">Scan</button>
                     <button @click="openCompetitor(c)"
                       class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">Detail</button>
+                    <button @click="startEditCompetitor(c)"
+                      class="text-xs bg-yellow-100 hover:bg-yellow-200 text-yellow-700 px-2 py-1 rounded">Edit</button>
+                    <button @click="deleteCompetitor(c.id)"
+                      class="text-xs bg-red-100 hover:bg-red-200 text-red-700 px-2 py-1 rounded">Delete</button>
                     <button @click="window.open(`/api/reports/competitor/${c.id}`, '_blank')"
                       class="text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 px-2 py-1 rounded">Report</button>
                   </div>
                 </td>
               </tr>
-            </template>
-          </tbody>
+              <!-- Inline edit row -->
+              <tr x-show="competitorEditId === c.id" class="bg-yellow-50 dark:bg-yellow-900/20">
+                <td colspan="5" class="px-4 py-2">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="font-medium text-sm text-gray-600 dark:text-gray-300 mr-1" x-text="c.domain"></span>
+                    <input x-model="competitorEditForm.name" placeholder="Display name"
+                      class="border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600 w-44" />
+                    <input x-model="competitorEditForm.base_url" placeholder="Base URL"
+                      class="border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600 w-56" />
+                    <button @click="saveCompetitor()"
+                      class="text-xs bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded font-medium">Save</button>
+                    <button @click="cancelEditCompetitor()"
+                      class="text-xs bg-gray-200 hover:bg-gray-300 dark:bg-gray-600 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded">Cancel</button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </template>
         </table>
         <div x-show="!competitors.competitors || competitors.competitors.length === 0" class="text-center py-8 text-gray-400 text-sm">
           No competitors tracked yet. Use Auto-Discover or Bulk Import to add them.
