@@ -141,24 +141,33 @@ class BaseScraper:
         "[itemprop='availability']",
     ]
 
-    def __init__(self, session_id: Optional[int] = None):
+    def __init__(self, session_id: Optional[int] = None, profile_name: Optional[str] = None):
         self.session_id = session_id
         self.delay: float = config.get("scraping", "delay_between_requests", default=2.0)
         self.max_retries: int = config.get("scraping", "max_retries", default=3)
         self.timeout_ms: int = config.get("scraping", "timeout_seconds", default=30) * 1000
         self.headless: bool = config.get("scraping", "headless", default=True)
-        self.user_agent: str = config.get(
-            "scraping",
-            "user_agent",
-            default="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        )
-        self._playwright = None
-        self._browser: Optional[Browser] = None
-        self._context: Optional[BrowserContext] = None
         self._consecutive_failures: int = 0
         self._circuit_breaker_threshold: int = config.get("scraping", "circuit_breaker_threshold", default=10)
         self._circuit_breaker_pause: int = config.get("scraping", "circuit_breaker_pause_seconds", default=300)
         self._context_error_count: int = 0
+
+        # Resolve browser profile
+        active = profile_name or config.get("browser", "default_profile", default="chrome_mac")
+        profiles = config.get("browser", "profiles", default={})
+        profile = profiles.get(active, {})
+        self._engine: str = profile.get("engine", "chromium")
+        self.user_agent: str = profile.get(
+            "user_agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        )
+        self._viewport_width: int = profile.get("viewport_width", 1280)
+        self._viewport_height: int = profile.get("viewport_height", 800)
+        logger.info("Browser profile: %s (engine=%s)", active, self._engine)
+
+        self._playwright = None
+        self._browser: Optional[Browser] = None
+        self._context: Optional[BrowserContext] = None
 
     async def __aenter__(self) -> "BaseScraper":
         await self.start()
@@ -178,14 +187,33 @@ class BaseScraper:
                 proxy_cfg["username"] = config.get("proxy", "username")
                 proxy_cfg["password"] = config.get("proxy", "password", default="")
 
-        self._browser = await self._playwright.chromium.launch(
-            headless=self.headless,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
-            proxy=proxy_cfg,
-        )
+        engine_obj = {
+            "chromium": self._playwright.chromium,
+            "firefox":  self._playwright.firefox,
+            "webkit":   self._playwright.webkit,
+        }.get(self._engine, self._playwright.chromium)
+
+        # Chromium accepts many CLI flags; Firefox and WebKit use only a subset
+        if self._engine == "chromium":
+            launch_kwargs: dict = {
+                "headless": self.headless,
+                "args": [
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                ],
+            }
+        else:
+            # Firefox and WebKit do not accept Chromium-specific args
+            launch_kwargs = {"headless": self.headless}
+
+        if proxy_cfg:
+            launch_kwargs["proxy"] = proxy_cfg
+
+        self._browser = await engine_obj.launch(**launch_kwargs)
         self._context = await self._browser.new_context(
             user_agent=self.user_agent,
-            viewport={"width": 1280, "height": 800},
+            viewport={"width": self._viewport_width, "height": self._viewport_height},
             ignore_https_errors=True,
             java_script_enabled=True,
         )
@@ -235,7 +263,7 @@ class BaseScraper:
             pass
         self._context = await self._browser.new_context(
             user_agent=self.user_agent,
-            viewport={"width": 1280, "height": 800},
+            viewport={"width": self._viewport_width, "height": self._viewport_height},
             ignore_https_errors=True,
             java_script_enabled=True,
         )
