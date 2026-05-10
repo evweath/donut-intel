@@ -6,9 +6,12 @@ Uses the same multi-strategy extraction as base_scraper.py.
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Callable, List, Optional
+from urllib.parse import urlparse
 
+import httpx
 from sqlalchemy.orm import Session
 
 from backend.competitor.matcher import MatchCriteria, match_competitor_product, match_similar_product
@@ -23,6 +26,57 @@ from backend.database.models import (
 from backend.scrapers.base_scraper import BaseScraper, ScrapedProduct
 
 logger = logging.getLogger(__name__)
+
+
+async def _is_shopify_store(base_url: str) -> bool:
+    """Quick check: does /products.json?limit=1 return a products array?"""
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            r = await client.get(f"{base_url.rstrip('/')}/products.json?limit=1")
+            return r.status_code == 200 and "products" in r.json()
+    except Exception:
+        return False
+
+
+async def scrape_shopify_store(base_url: str, domain: str) -> List[ScrapedProduct]:
+    """Paginate through Shopify's /products.json and return ScrapedProduct list."""
+    products: List[ScrapedProduct] = []
+    page = 1
+    base = base_url.rstrip("/")
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        while True:
+            url = f"{base}/products.json?limit=250&page={page}"
+            try:
+                r = await client.get(url)
+                r.raise_for_status()
+                batch = r.json().get("products", [])
+            except Exception as exc:
+                logger.warning("Shopify products.json page %d failed: %s", page, exc)
+                break
+            if not batch:
+                break
+            for item in batch:
+                variant = item["variants"][0] if item.get("variants") else {}
+                price_raw = variant.get("price")
+                price = float(price_raw) if price_raw else None
+                images = [img["src"] for img in item.get("images", []) if img.get("src")]
+                sp = ScrapedProduct(
+                    url=f"{base}/products/{item['handle']}",
+                    title=item.get("title", ""),
+                    price=price,
+                    in_stock=variant.get("available", True),
+                    sku=variant.get("sku") or None,
+                    manufacturer=item.get("vendor") or None,
+                    description=re.sub(r"<[^>]+>", " ", item.get("body_html") or "").strip() or None,
+                    images=images,
+                    source_site=domain,
+                )
+                products.append(sp)
+            logger.info("Shopify %s: page %d → %d products so far", domain, page, len(products))
+            if len(batch) < 250:
+                break
+            page += 1
+    return products
 
 
 async def run_competitor_scan(
@@ -76,11 +130,31 @@ async def run_competitor_scan(
         })
 
         try:
-            scraper = BaseScraper(base_url=competitor.base_url or f"https://{competitor.domain}")
-            scraped_products: List[ScrapedProduct] = await scraper.scrape_site(
-                max_pages=max_pages,
-                progress_cb=lambda e, d: emit(e, d),
-            )
+            base_url = competitor.base_url or f"https://{competitor.domain}"
+
+            if await _is_shopify_store(base_url):
+                logger.info("Detected Shopify store: %s — using JSON API", competitor.domain)
+                scraped_products = await scrape_shopify_store(base_url, competitor.domain)
+            else:
+                scraper = BaseScraper()
+                async with scraper:
+                    product_urls = await scraper.discover_product_urls(
+                        base_url=base_url,
+                        max_pages=max_pages,
+                    )
+                    await emit("competitor_urls_discovered", {
+                        "competitor": competitor.domain,
+                        "count": len(product_urls),
+                    })
+                    scraped_products = []
+                    for url in product_urls:
+                        try:
+                            sp = await scraper.extract_product(url, source_site=competitor.domain)
+                            if sp and sp.is_valid():
+                                scraped_products.append(sp)
+                        except Exception:
+                            logger.debug("Failed to extract product from %s", url)
+                            continue
 
             await emit("competitor_products_found", {
                 "competitor": competitor.domain,
@@ -138,7 +212,7 @@ async def run_competitor_scan(
                         competitor_url=sp.url,
                         competitor_title=sp.title,
                         competitor_price=sp.price,
-                        competitor_image_url=sp.image_url,
+                        competitor_image_url=sp.images[0] if sp.images else None,
                         match_type="|".join(result.match_types),
                         match_confidence=result.confidence,
                         match_reasons_json=json.dumps(result.reasons),
