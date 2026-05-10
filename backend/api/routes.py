@@ -68,6 +68,9 @@ class ConnectionManager:
 manager = ConnectionManager()
 _active_scans: Dict[int, Any] = {}
 
+from backend.tasks.manager import task_manager as _task_manager
+_task_manager.set_broadcast(manager.broadcast)
+
 
 @router.websocket("/ws/scan-progress")
 async def websocket_endpoint(websocket: WebSocket):
@@ -966,3 +969,211 @@ def update_setting(req: UpdateSettingRequest):
 @router.get("/api/settings/db-health")
 def db_health():
     return db_health_check()
+
+
+# ---------------------------------------------------------------------------
+# Task Manager — active/recent task list
+# ---------------------------------------------------------------------------
+
+@router.get("/api/tasks")
+def list_tasks():
+    return {"tasks": _task_manager.get_all()}
+
+
+# ---------------------------------------------------------------------------
+# Scan Cycle Status — prevents re-scanning before a full cycle is approved
+# ---------------------------------------------------------------------------
+
+_CYCLE_KEY = "scan_cycle_status"
+
+def _read_cycle(db: Session) -> dict:
+    row = db.query(AppSetting).filter(AppSetting.key == _CYCLE_KEY).first()
+    if row and row.value:
+        try:
+            return json.loads(row.value)
+        except Exception:
+            pass
+    return {"status": "idle", "domains_started": [], "domains_complete": [], "dedup_done": False, "last_complete_at": None}
+
+
+def _write_cycle(db: Session, state: dict) -> None:
+    row = db.query(AppSetting).filter(AppSetting.key == _CYCLE_KEY).first()
+    if row:
+        row.value = json.dumps(state)
+    else:
+        db.add(AppSetting(key=_CYCLE_KEY, value=json.dumps(state), description="Parallel scan cycle state"))
+
+
+@router.get("/api/scan/cycle-status")
+def get_cycle_status(db: Session = Depends(get_db_session)):
+    return _read_cycle(db)
+
+
+@router.post("/api/scan/cycle/approve")
+def approve_cycle(db: Session = Depends(get_db_session)):
+    state = _read_cycle(db)
+    state["status"] = "complete"
+    state["last_complete_at"] = datetime.utcnow().isoformat()
+    _write_cycle(db, state)
+    return {"status": "approved"}
+
+
+# ---------------------------------------------------------------------------
+# Parallel Source Scan — spawns one task per enabled domain + dedup after
+# ---------------------------------------------------------------------------
+
+@router.post("/api/scan/all-sources")
+async def start_parallel_scan(db: Session = Depends(get_db_session)):
+    state = _read_cycle(db)
+    if state.get("status") in ("scanning", "dedup_running", "review_pending"):
+        raise HTTPException(status_code=409, detail="A scan cycle is already in progress")
+
+    sites = [s for s in config.get("source_sites", default=[]) if s.get("enabled")]
+    if not sites:
+        raise HTTPException(status_code=400, detail="No enabled source sites configured")
+
+    # Reset cycle state
+    state = {
+        "status": "scanning",
+        "domains_started": [s["domain"] for s in sites],
+        "domains_complete": [],
+        "dedup_done": False,
+        "last_complete_at": state.get("last_complete_at"),
+    }
+    _write_cycle(db, state)
+    db.commit()
+
+    async def _broadcast_cycle(new_state: dict) -> None:
+        await manager.broadcast({"event": "cycle_status", **new_state})
+
+    domain_task_ids: List[str] = []
+
+    for site in sites:
+        domain = site["domain"]
+
+        async def _scan_domain(s=site) -> None:
+            scan_sess = ScanSession(
+                name=f"Parallel scan — {s['name']} {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+                session_type="source", target=s["domain"], status="pending",
+            )
+            with session_scope() as sess_db:
+                sess_db.add(scan_sess)
+                sess_db.flush()
+                scan_id = scan_sess.id
+
+            async def ws_cb(event: str, data: dict) -> None:
+                await manager.broadcast({"event": event, "session_id": scan_id, **data})
+
+            await run_source_scan(scan_session_id=scan_id, site_filter=s["domain"], progress_callbacks=[ws_cb])
+
+            with session_scope() as upd_db:
+                cyc = _read_cycle(upd_db)
+                if s["domain"] not in cyc["domains_complete"]:
+                    cyc["domains_complete"].append(s["domain"])
+                if set(cyc["domains_complete"]) >= set(cyc["domains_started"]):
+                    cyc["status"] = "dedup_running"
+                _write_cycle(upd_db, cyc)
+            await _broadcast_cycle(cyc)
+
+        tid = _task_manager.submit(f"Scan {domain}", _scan_domain)
+        domain_task_ids.append(tid)
+
+    async def _run_dedup() -> None:
+        with session_scope() as dd_db:
+            engine = DeduplicationEngine()
+            stats = engine.run(dd_db, None)
+            cyc = _read_cycle(dd_db)
+            cyc["dedup_done"] = True
+            cyc["status"] = "review_pending"
+            _write_cycle(dd_db, cyc)
+        await manager.broadcast({"event": "dedup_complete", "stats": stats})
+        await _broadcast_cycle(cyc)
+
+    _task_manager.submit("Deduplication", _run_dedup, depends_on=domain_task_ids)
+
+    return {"status": "started", "domains": [s["domain"] for s in sites], "task_ids": domain_task_ids}
+
+
+# ---------------------------------------------------------------------------
+# Domain Comparison — products on 2+ source domains with field differences
+# ---------------------------------------------------------------------------
+
+@router.get("/api/domain-comparison")
+def get_domain_comparison(
+    page: int = 1,
+    per_page: int = 50,
+    show_all: bool = False,
+    db: Session = Depends(get_db_session),
+):
+    # Product IDs present on 2+ distinct active source sites
+    multi_domain_ids = (
+        db.query(ProductSource.product_id)
+        .filter(ProductSource.is_active == True)
+        .group_by(ProductSource.product_id)
+        .having(func.count(func.distinct(ProductSource.source_site)) >= 2)
+        .subquery()
+    )
+
+    products = (
+        db.query(Product)
+        .filter(Product.id.in_(multi_domain_ids), Product.is_active == True)
+        .order_by(Product.canonical_title)
+        .all()
+    )
+
+    results = []
+    for product in products:
+        # Latest active source per site
+        site_sources: Dict[str, Any] = {}
+        for src in sorted(product.sources, key=lambda s: s.scraped_at or datetime.min):
+            if src.is_active:
+                site_sources[src.source_site] = src
+
+        if len(site_sources) < 2:
+            continue
+
+        sites_data = {
+            site: {
+                "title": src.source_title,
+                "price": src.source_price,
+                "manufacturer": src.source_manufacturer,
+                "model_number": src.source_model_number,
+                "sku": src.source_sku,
+                "url": src.source_url,
+                "scraped_at": src.scraped_at.isoformat() if src.scraped_at else None,
+            }
+            for site, src in site_sources.items()
+        }
+
+        diff_fields: List[str] = []
+        for field in ("title", "price", "manufacturer", "model_number", "sku"):
+            vals = [str(sites_data[s][field]) for s in site_sources if sites_data[s][field] is not None]
+            if len(set(vals)) > 1:
+                diff_fields.append(field)
+
+        if not show_all and not diff_fields:
+            continue
+
+        results.append({
+            "product_id": product.id,
+            "canonical_title": product.canonical_title,
+            "manufacturer": product.manufacturer,
+            "model_number": product.model_number,
+            "category": product.category,
+            "domains": sites_data,
+            "diff_fields": diff_fields,
+        })
+
+    total = len(results)
+    start = (page - 1) * per_page
+    page_data = results[start: start + per_page]
+
+    all_domains = sorted({site for r in results for site in r["domains"]})
+
+    return {
+        "products": page_data,
+        "total": total,
+        "page": page,
+        "pages": max(1, (total + per_page - 1) // per_page),
+        "all_domains": all_domains,
+    }

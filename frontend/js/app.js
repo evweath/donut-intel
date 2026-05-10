@@ -26,6 +26,7 @@ function app() {
       { id: 'pricing',      icon: '💰', label: 'Price Comparison',  badge: 0 },
       { id: 'scans',        icon: '🔍', label: 'Scans',             badge: 0 },
       { id: 'duplicates',   icon: '🔁', label: 'Duplicates',        badge: 0 },
+      { id: 'sync',         icon: '🔄', label: 'Source Sync',        badge: 0 },
       { id: 'scheduler',    icon: '⏰', label: 'Scheduler',         badge: 0 },
       { id: 'reports',      icon: '📋', label: 'Reports',           badge: 0 },
       { id: 'export',       icon: '📤', label: 'Export',            badge: 0 },
@@ -54,6 +55,15 @@ function app() {
     // Duplicates
     duplicates: { candidates: [] },
     dupFilter: 'pending',
+
+    // Source Sync / Domain Comparison
+    domainComparison: { products: [], total: 0, all_domains: [], page: 1, pages: 1 },
+    domainCompPage: 1,
+    domainCompShowAll: false,
+    syncSelected: {},   // { product_id: true/false }
+    cycleStatus: { status: 'idle', domains_complete: [], domains_started: [], dedup_done: false, last_complete_at: null },
+    taskList: [],
+    parallelScanRunning: false,
 
     // Competitors
     competitors: { competitors: [], total: 0 },
@@ -124,6 +134,7 @@ function app() {
         this.loadCompetitors(),
         this.loadJobs(),
         this.loadExportHistory(),
+        this.loadCycleStatus(),
       ]);
       this.loadDuplicates();
       this.loadSourceSites();
@@ -373,6 +384,77 @@ function app() {
       let note = 'Driven by ' + top.join(' and ') + '.';
       if (missing.length) note += ' Limited by ' + missing.join(', ') + '.';
       return note;
+    },
+
+    // -----------------------------------------------------------------------
+    // Source Sync / Domain Comparison
+    // -----------------------------------------------------------------------
+    async loadDomainComparison(page = 1) {
+      this.domainCompPage = page;
+      try {
+        const params = new URLSearchParams({ page, per_page: 50, show_all: this.domainCompShowAll });
+        this.domainComparison = await this.api(`/api/domain-comparison?${params}`) || { products: [], total: 0, all_domains: [] };
+      } catch (e) { this.toast('Failed to load domain comparison: ' + e.message, 'error'); }
+    },
+
+    toggleSyncSelect(productId) {
+      this.syncSelected[productId] = !this.syncSelected[productId];
+    },
+
+    selectAllSync() {
+      this.domainComparison.products.forEach(p => { this.syncSelected[p.product_id] = true; });
+    },
+
+    clearSyncSelect() {
+      this.syncSelected = {};
+    },
+
+    syncSelectedCount() {
+      return Object.values(this.syncSelected).filter(Boolean).length;
+    },
+
+    // -----------------------------------------------------------------------
+    // Scan Cycle & Parallel Tasks
+    // -----------------------------------------------------------------------
+    async loadCycleStatus() {
+      try {
+        this.cycleStatus = await this.api('/api/scan/cycle-status') || { status: 'idle' };
+      } catch {}
+    },
+
+    async loadTaskList() {
+      try {
+        this.taskList = (await this.api('/api/tasks')).tasks || [];
+      } catch {}
+    },
+
+    async startParallelScan() {
+      if (this.parallelScanRunning) return;
+      if (!confirm('Start a full parallel scan of all source domains? This will scrape all domains simultaneously, then auto-run deduplication.')) return;
+      this.parallelScanRunning = true;
+      try {
+        await this.api('/api/scan/all-sources', { method: 'POST', body: JSON.stringify({}) });
+        this.toast('Parallel scan started — all domains scanning simultaneously', 'info');
+        await this.loadCycleStatus();
+        await this.loadTaskList();
+      } catch (e) {
+        this.toast('Failed to start scan: ' + e.message, 'error');
+        this.parallelScanRunning = false;
+      }
+    },
+
+    async approveCycle() {
+      if (!confirm('Mark this scan cycle as complete and approved? This will allow a new full scan to begin.')) return;
+      try {
+        await this.api('/api/scan/cycle/approve', { method: 'POST', body: JSON.stringify({}) });
+        this.toast('Scan cycle approved — ready for next scan', 'success');
+        await this.loadCycleStatus();
+        this.parallelScanRunning = false;
+      } catch (e) { this.toast('Failed: ' + e.message, 'error'); }
+    },
+
+    diffClass(hasDiff) {
+      return hasDiff ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-green-600 dark:text-green-400';
     },
 
     // -----------------------------------------------------------------------
@@ -703,6 +785,21 @@ function app() {
         case 'crawl_progress':
           if (msg.pages_visited % 10 === 0)
             this.scanStatus.message = `Crawling... ${msg.pages_visited} pages, ${msg.products_found} found`;
+          break;
+        case 'task_update':
+          this.loadTaskList();
+          if (msg.task?.name === 'Deduplication' && msg.task?.status === 'complete')
+            this.loadCycleStatus();
+          if (msg.task?.name?.startsWith('Scan ') && msg.task?.status === 'complete')
+            this.loadCycleStatus();
+          break;
+        case 'cycle_status':
+          this.cycleStatus = { ...this.cycleStatus, ...msg };
+          if (msg.status === 'complete' || msg.status === 'idle') this.parallelScanRunning = false;
+          break;
+        case 'parallel_scan_complete':
+          this.parallelScanRunning = false;
+          this.loadCycleStatus();
           break;
       }
     },

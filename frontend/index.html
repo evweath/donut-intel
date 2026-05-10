@@ -42,7 +42,7 @@
     <nav class="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
       <template x-for="item in navItems" :key="item.id">
         <button
-          @click="currentView = item.id; item.id === 'products' && loadProducts(1); item.id === 'competitors' && loadCompetitors(1); item.id === 'pricing' && loadPriceMatrix(1); item.id === 'scheduler' && loadJobs(); item.id === 'export' && loadExportHistory()"
+          @click="currentView = item.id; item.id === 'products' && loadProducts(1); item.id === 'competitors' && loadCompetitors(1); item.id === 'pricing' && loadPriceMatrix(1); item.id === 'scheduler' && loadJobs(); item.id === 'export' && loadExportHistory(); item.id === 'sync' && loadDomainComparison()"
           :class="currentView === item.id
             ? 'bg-orange-600 text-white'
             : 'text-gray-300 hover:bg-gray-700 hover:text-white'"
@@ -322,6 +322,60 @@
         </button>
       </div>
 
+      <!-- Scan Cycle Status -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 mb-4">
+        <div class="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h3 class="font-semibold text-sm mb-1">Scan Cycle Status</h3>
+            <div class="flex items-center gap-2 text-sm">
+              <span :class="{
+                'text-green-600': cycleStatus.status === 'idle' || cycleStatus.status === 'complete',
+                'text-blue-600': cycleStatus.status === 'scanning',
+                'text-yellow-600': cycleStatus.status === 'dedup_pending',
+                'text-orange-600': cycleStatus.status === 'review_pending'
+              }" class="font-medium capitalize" x-text="cycleStatus.status?.replace('_',' ') || 'idle'"></span>
+              <span x-show="cycleStatus.domains_complete?.length" class="text-xs text-gray-400"
+                x-text="'(' + (cycleStatus.domains_complete||[]).join(', ') + ' complete)'"></span>
+            </div>
+            <div x-show="cycleStatus.last_complete_at" class="text-xs text-gray-400 mt-0.5"
+              x-text="'Last complete: ' + (cycleStatus.last_complete_at ? new Date(cycleStatus.last_complete_at).toLocaleString() : 'Never')">
+            </div>
+          </div>
+          <div class="flex gap-2 flex-wrap">
+            <button @click="startParallelScan()"
+              :disabled="parallelScanRunning || (cycleStatus.status !== 'idle' && cycleStatus.status !== 'complete' && cycleStatus.status)"
+              class="bg-orange-500 hover:bg-orange-600 disabled:opacity-40 text-white px-4 py-2 rounded-lg text-sm font-medium">
+              ⚡ Scan All Domains (Parallel)
+            </button>
+            <button x-show="cycleStatus.status === 'review_pending'"
+              @click="approveCycle()"
+              class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
+              ✓ Approve & Complete Cycle
+            </button>
+          </div>
+        </div>
+
+        <!-- Active tasks -->
+        <div x-show="taskList.length > 0" class="mt-3 border-t border-gray-100 dark:border-gray-700 pt-3">
+          <div class="text-xs font-semibold text-gray-400 uppercase mb-1.5">Active Tasks</div>
+          <div class="flex flex-wrap gap-2">
+            <template x-for="t in taskList" :key="t.id">
+              <div class="flex items-center gap-1.5 text-xs px-2 py-1 rounded-full border"
+                :class="{
+                  'border-blue-300 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300': t.status === 'running',
+                  'border-yellow-300 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700': t.status === 'blocked',
+                  'border-green-300 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300': t.status === 'complete',
+                  'border-red-300 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300': t.status === 'failed',
+                  'border-gray-300 bg-gray-50 dark:bg-gray-700 text-gray-500': t.status === 'pending'
+                }">
+                <span x-text="{running:'⏳',blocked:'⏸',complete:'✓',failed:'✗',pending:'○'}[t.status] || '○'"></span>
+                <span x-text="t.name"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
       <!-- Scan by Site -->
       <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 mb-4">
         <h3 class="font-semibold mb-3">Scan Individual Sites</h3>
@@ -403,16 +457,28 @@
         <template x-for="dup in duplicates.candidates" :key="dup.id">
           <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
 
-            <!-- Header: score + summary note + actions -->
-            <div class="flex items-start justify-between mb-3 gap-4">
-              <div class="flex items-center gap-3 min-w-0">
-                <div class="text-3xl font-bold flex-shrink-0"
-                  :class="dup.confidence_score >= 85 ? 'text-red-500' : dup.confidence_score >= 70 ? 'text-yellow-500' : 'text-gray-400'"
-                  x-text="Math.round(dup.confidence_score) + '%'">
+            <!-- Header: score + match badges + summary + actions -->
+            <div class="flex items-start justify-between mb-3 gap-3">
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-3 mb-2">
+                  <div class="text-2xl font-bold flex-shrink-0"
+                    :class="dup.confidence_score >= 85 ? 'text-red-500' : dup.confidence_score >= 70 ? 'text-yellow-500' : 'text-gray-400'"
+                    x-text="Math.round(dup.confidence_score) + '%'">
+                  </div>
+                  <div>
+                    <div class="text-xs font-semibold text-gray-400 uppercase">Match Confidence</div>
+                    <div class="text-xs text-gray-500 italic" x-text="dupSummary(dup)"></div>
+                  </div>
                 </div>
-                <div class="min-w-0">
-                  <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Match Confidence</div>
-                  <div class="text-xs text-gray-500 italic mt-0.5" x-text="dupSummary(dup)"></div>
+                <!-- Colored field badges -->
+                <div class="flex flex-wrap gap-1">
+                  <template x-for="row in dupFields(dup)" :key="row.label">
+                    <span x-show="row.score !== null"
+                      :class="row.score >= 80 ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300' : row.score >= 40 ? 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300' : (row.primary !== '—' && row.secondary !== '—') ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' : 'bg-gray-100 dark:bg-gray-700 text-gray-500'"
+                      class="text-xs px-1.5 py-0.5 rounded font-mono"
+                      x-text="row.label + ' ' + Math.round(row.score) + '%'">
+                    </span>
+                  </template>
                 </div>
               </div>
               <div class="flex-shrink-0">
@@ -429,42 +495,152 @@
               </div>
             </div>
 
-            <!-- Row-based comparison table: green = match, yellow = partial, red = mismatch -->
-            <div class="rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 text-xs">
-              <!-- Column headers -->
-              <div class="grid grid-cols-[90px_1fr_1fr] bg-gray-100 dark:bg-gray-700 text-gray-500 font-semibold uppercase tracking-wide">
-                <div class="px-3 py-1.5">Field</div>
-                <div class="px-3 py-1.5 border-l border-gray-200 dark:border-gray-600 flex items-center gap-1.5">
-                  <img x-show="dup.primary.image" :src="dup.primary.image" class="w-5 h-5 object-cover rounded" loading="lazy" @error="$el.style.display='none'" />
-                  Primary
-                </div>
-                <div class="px-3 py-1.5 border-l border-gray-200 dark:border-gray-600 flex items-center gap-1.5">
-                  <img x-show="dup.secondary.image" :src="dup.secondary.image" class="w-5 h-5 object-cover rounded" loading="lazy" @error="$el.style.display='none'" />
-                  Secondary
-                </div>
-              </div>
-              <!-- Data rows -->
-              <template x-for="row in dupFields(dup)" :key="row.label">
-                <div :class="dupRowClass(row.score, row.primary !== '—' && row.secondary !== '—')"
-                  class="grid grid-cols-[90px_1fr_1fr] border-t border-gray-200 dark:border-gray-700">
-                  <div class="px-3 py-1.5 font-semibold text-gray-500 flex items-baseline gap-1 flex-wrap">
-                    <span x-text="row.label"></span>
-                    <span x-show="row.score !== null && row.score !== undefined"
-                      class="text-gray-400 font-normal"
-                      x-text="'(' + Math.round(row.score) + '%)'"></span>
+            <!-- Side-by-side comparison (original style) -->
+            <div class="grid grid-cols-2 gap-4">
+              <template x-for="[side, product] in [['Primary', dup.primary], ['Secondary', dup.secondary]]" :key="side">
+                <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                  <div class="text-xs font-bold text-gray-400 uppercase mb-2" x-text="side"></div>
+                  <div class="flex items-start gap-2 mb-2">
+                    <img x-show="product.image" :src="product.image" class="w-12 h-12 object-cover rounded" loading="lazy" @error="$el.style.display='none'" />
+                    <div>
+                      <div class="text-sm font-medium line-clamp-2" x-text="product.title"></div>
+                      <div class="text-xs font-bold mt-0.5"
+                        :class="(dup.match_reasons?.price || 0) >= 80 ? 'text-green-600' : 'text-red-500'"
+                        x-text="product.price ? '$' + product.price.toFixed(2) : '—'"></div>
+                    </div>
                   </div>
-                  <div class="px-3 py-1.5 border-l border-gray-200 dark:border-gray-700 break-words"
-                    :class="row.mono ? 'font-mono' : ''"
-                    x-text="row.primary"></div>
-                  <div class="px-3 py-1.5 border-l border-gray-200 dark:border-gray-700 break-words"
-                    :class="row.mono ? 'font-mono' : ''"
-                    x-text="row.secondary"></div>
+                  <div class="text-xs text-gray-500 space-y-0.5">
+                    <div x-show="product.manufacturer">
+                      Mfr: <span :class="(dup.match_reasons?.manufacturer || 0) >= 80 ? 'text-green-600 font-medium' : 'text-red-500 font-medium'" x-text="product.manufacturer"></span>
+                    </div>
+                    <div x-show="product.model_number">
+                      Model: <span :class="(dup.match_reasons?.model_number || 0) >= 80 ? 'text-green-600 font-mono' : 'text-red-500 font-mono'" x-text="product.model_number"></span>
+                    </div>
+                    <div x-show="product.sku">
+                      SKU: <span class="font-mono text-gray-400" x-text="product.sku"></span>
+                    </div>
+                    <div>Sites: <span class="text-blue-500" x-text="(product.sources || []).join(', ')"></span></div>
+                  </div>
                 </div>
               </template>
             </div>
 
           </div>
         </template>
+      </div>
+    </div>
+
+    <!-- ===== SOURCE SYNC VIEW ===== -->
+    <div x-show="currentView === 'sync'" class="p-6">
+      <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <div>
+          <h2 class="text-2xl font-bold">Source Domain Sync</h2>
+          <p class="text-xs text-gray-400 mt-0.5">Products appearing on multiple source domains — field differences highlighted. Select items to sync later.</p>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <label class="flex items-center gap-1.5 text-sm cursor-pointer">
+            <input type="checkbox" x-model="domainCompShowAll" @change="loadDomainComparison(1)" class="w-4 h-4" />
+            Show identical too
+          </label>
+          <button @click="selectAllSync()" class="text-xs bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 px-3 py-1.5 rounded">Select All</button>
+          <button @click="clearSyncSelect()" class="text-xs bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 px-3 py-1.5 rounded">Clear</button>
+          <span x-show="syncSelectedCount() > 0" class="text-xs bg-blue-500 text-white px-2 py-1 rounded-full font-bold"
+            x-text="syncSelectedCount() + ' selected'"></span>
+          <button @click="loadDomainComparison(domainCompPage)" class="text-xs bg-orange-500 hover:bg-orange-600 text-white px-3 py-1.5 rounded">🔄 Refresh</button>
+        </div>
+      </div>
+
+      <!-- Domain legend -->
+      <div x-show="domainComparison.all_domains?.length" class="flex flex-wrap gap-2 mb-4">
+        <span class="text-xs text-gray-500 self-center">Domains:</span>
+        <template x-for="d in domainComparison.all_domains" :key="d">
+          <span class="text-xs bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full" x-text="d"></span>
+        </template>
+        <span class="text-xs text-gray-400 ml-auto self-center" x-text="domainComparison.total + ' products with differences'"></span>
+      </div>
+
+      <!-- Color key -->
+      <div class="flex gap-3 mb-3 text-xs">
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-green-200 inline-block"></span> Match</span>
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-red-200 inline-block"></span> Differs</span>
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-gray-200 inline-block"></span> Not on this domain</span>
+      </div>
+
+      <!-- Product list -->
+      <div class="space-y-2">
+        <template x-for="p in domainComparison.products" :key="p.product_id">
+          <div class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
+            <!-- Product header row -->
+            <div class="flex items-center gap-3 px-4 py-3 border-b border-gray-100 dark:border-gray-700">
+              <input type="checkbox"
+                :checked="syncSelected[p.product_id]"
+                @change="toggleSyncSelect(p.product_id)"
+                class="w-4 h-4 flex-shrink-0 cursor-pointer" />
+              <img x-show="p.image" :src="p.image" class="w-8 h-8 object-cover rounded flex-shrink-0" loading="lazy" @error="$el.style.display='none'" />
+              <div class="flex-1 min-w-0">
+                <div class="font-medium text-sm truncate" x-text="p.canonical_title"></div>
+                <div class="text-xs text-gray-400 flex gap-3 mt-0.5">
+                  <span x-show="p.manufacturer" x-text="p.manufacturer"></span>
+                  <span x-show="p.model_number" class="font-mono" x-text="p.model_number"></span>
+                  <span x-show="p.category" x-text="p.category"></span>
+                </div>
+              </div>
+              <div class="flex gap-1 flex-shrink-0">
+                <template x-for="diff in p.differences" :key="diff">
+                  <span class="text-xs bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded font-medium" x-text="diff"></span>
+                </template>
+                <span x-show="!p.differences?.length" class="text-xs bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 px-1.5 py-0.5 rounded">identical</span>
+              </div>
+            </div>
+
+            <!-- Per-domain field comparison -->
+            <div class="overflow-x-auto">
+              <table class="w-full text-xs">
+                <thead class="bg-gray-50 dark:bg-gray-700/50 text-gray-400">
+                  <tr>
+                    <th class="text-left px-4 py-1.5 font-medium w-24">Field</th>
+                    <template x-for="domain in domainComparison.all_domains" :key="domain">
+                      <th class="text-left px-4 py-1.5 font-medium" x-text="domain"></th>
+                    </template>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-50 dark:divide-gray-700/50">
+                  <template x-for="field in ['title','price','manufacturer','model_number','sku']" :key="field">
+                    <tr :class="p.differences?.includes(field) ? 'bg-red-50 dark:bg-red-900/10' : 'bg-green-50 dark:bg-green-900/10'">
+                      <td class="px-4 py-1 font-medium text-gray-500 capitalize" x-text="field.replace('_',' ')"></td>
+                      <template x-for="domain in domainComparison.all_domains" :key="domain">
+                        <td class="px-4 py-1"
+                          :class="p.sources[domain] ? (p.differences?.includes(field) ? 'text-red-700 dark:text-red-300' : 'text-green-700 dark:text-green-300') : 'text-gray-300 dark:text-gray-600'">
+                          <span x-show="p.sources[domain]"
+                            :class="field === 'model_number' || field === 'sku' ? 'font-mono' : ''"
+                            x-text="field === 'price' ? (p.sources[domain]?.price ? '$' + Number(p.sources[domain].price).toFixed(2) : '—') : (p.sources[domain]?.[field] || '—')">
+                          </span>
+                          <span x-show="!p.sources[domain]" class="italic">not listed</span>
+                        </td>
+                      </template>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Empty state -->
+      <div x-show="!domainComparison.products?.length" class="bg-white dark:bg-gray-800 rounded-xl shadow p-12 text-center text-gray-400">
+        <div class="text-4xl mb-3">🔄</div>
+        <div class="font-semibold">No cross-domain products yet</div>
+        <div class="text-sm mt-1">Run a full scan of all source domains, then dedup, to see products that appear on multiple domains.</div>
+      </div>
+
+      <!-- Pagination -->
+      <div x-show="domainComparison.pages > 1" class="flex justify-between items-center mt-4">
+        <button @click="loadDomainComparison(domainCompPage - 1)" :disabled="domainCompPage <= 1"
+          class="px-3 py-1.5 rounded border text-sm disabled:opacity-40">← Prev</button>
+        <span class="text-sm text-gray-500" x-text="`Page ${domainCompPage} of ${domainComparison.pages}`"></span>
+        <button @click="loadDomainComparison(domainCompPage + 1)" :disabled="domainCompPage >= domainComparison.pages"
+          class="px-3 py-1.5 rounded border text-sm disabled:opacity-40">Next →</button>
       </div>
     </div>
 
