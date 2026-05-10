@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 EXCLUDED_DOMAINS = {
     "donut-supplies.com",
     "donut-equipment.com",
-    "bakerywholesalers.com",
     "amazon.com",
     "ebay.com",
     "walmart.com",
