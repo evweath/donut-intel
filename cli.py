@@ -26,11 +26,11 @@ def cmd_scan(args):
     from backend.database.db import session_scope
     from backend.database.models import ScanSession
     from backend.scrapers.source_scraper import run_source_scan
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     with session_scope() as db:
         sess = ScanSession(
-            name=f"CLI Scan {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+            name=f"CLI Scan {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}",
             session_type="source",
             target=args.site or "all_sources",
             status="pending",
@@ -63,7 +63,7 @@ def cmd_competitor_scan(args):
     from backend.competitor.scraper import run_competitor_scan
     from backend.database.db import session_scope
     from backend.database.models import Competitor
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     with session_scope() as db:
         if args.domain:
@@ -79,7 +79,7 @@ def cmd_competitor_scan(args):
         print("No competitors found. Discover or import competitors first.")
         sys.exit(1)
 
-    session_name = args.session or f"CLI Scan {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+    session_name = args.session or f"CLI Scan {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}"
     for cid in competitor_ids:
         print(f"Scanning competitor {cid}...")
         result = asyncio.run(run_competitor_scan(
@@ -99,7 +99,7 @@ def cmd_import(args):
     from backend.competitor.discovery import bulk_import_competitors
     from backend.database.db import session_scope
     from backend.database.models import Competitor
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     domains = []
     if args.file:
@@ -119,7 +119,7 @@ def cmd_import(args):
             if not db.query(Competitor).filter(Competitor.domain == d["domain"]).first():
                 db.add(Competitor(
                     domain=d["domain"], name=d["name"], base_url=d["base_url"],
-                    scan_session_name=args.session or f"CLI Import {datetime.utcnow().strftime('%Y-%m-%d')}",
+                    scan_session_name=args.session or f"CLI Import {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
                 ))
                 added += 1
     print(f"Imported {added}/{len(parsed)} new competitors.")
