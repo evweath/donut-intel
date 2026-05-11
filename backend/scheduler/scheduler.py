@@ -2,6 +2,7 @@
 Task Scheduler (F43-F47)
 APScheduler-based cron job manager for scans, exports, and price checks.
 """
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
@@ -166,14 +167,18 @@ async def _execute_job(job_id: int):
         elif job_type == "export":
             from backend.export.exporter import export_products
             fmt = config_data.get("format", "xlsx")
-            export_products(fmt=fmt, triggered_by="scheduler")
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None, lambda: export_products(fmt=fmt, triggered_by="scheduler")
+            )
 
         elif job_type == "dedup":
             from backend.database.db import session_scope
             from backend.dedup.engine import DeduplicationEngine
-            with session_scope() as db:
-                engine = DeduplicationEngine()
-                engine.run(db)
+            def _run_dedup():
+                with session_scope() as db:
+                    DeduplicationEngine().run(db)
+            await asyncio.get_running_loop().run_in_executor(None, _run_dedup)
 
         with session_scope() as db:
             job = db.get(ScheduledJob, job_id)
