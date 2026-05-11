@@ -115,6 +115,7 @@ function app() {
     bulkImportText: '',
     bulkImportSessionName: '',
     competitorScanForm: { ids: [], session_name: '', find_similar: false, max_pages: 100, criteria: {} },
+    competitorScanRunning: false,
     competitorScanCriteria: {
       use_model_number: true, use_manufacturer: true, use_title_fuzzy: true,
       use_title_exact: true, use_price: false, fuzzy_threshold: 70,
@@ -844,8 +845,17 @@ function app() {
           criteria: this.competitorScanCriteria,
         };
         await this.api('/api/competitors/scan', { method: 'POST', body: JSON.stringify(body) });
+        this.competitorScanRunning = true;
         this.toast(`Scanning ${ids.length} competitor(s)...`, 'info');
       } catch (e) { this.toast('Competitor scan failed: ' + e.message, 'error'); }
+    },
+
+    async scanAllCompetitors() {
+      if (this.competitorScanRunning) return;
+      if (!this.competitors.competitors.length) await this.loadCompetitors();
+      const ids = this.competitors.competitors.map(c => c.id);
+      if (!ids.length) { this.toast('No competitors configured yet', 'warning'); return; }
+      await this.scanCompetitors(ids);
     },
 
     async openCompetitor(comp) {
@@ -1083,8 +1093,12 @@ function app() {
           this.toast(`Scanning ${msg.competitor}...`, 'info', 2000); break;
         case 'competitor_scan_complete':
           this.toast(`${msg.competitor}: ${msg.matches_found} matches found`, 'success');
-          this.loadCompetitors(); this.loadStats(); break;
+          this.competitorScanRunning = false;
+          this.loadCompetitors(); this.loadStats();
+          if (this.currentView === 'pricing') this.loadPriceMatrix(this.priceMatrixPage);
+          break;
         case 'competitor_scan_error':
+          this.competitorScanRunning = false;
           this.toast(`Competitor scan error: ${msg.error}`, 'error'); break;
         case 'ai_categorize_complete':
           this.toast(`AI categorized ${msg.categorized}/${msg.total} products`, 'success');

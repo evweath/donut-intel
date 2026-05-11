@@ -1275,18 +1275,32 @@
     <div x-show="currentView === 'pricing'" class="p-6">
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-2xl font-bold">Price Comparison Matrix</h2>
-        <button @click="loadPriceMatrix(1)" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm">
-          🔄 Refresh
-        </button>
+        <div class="flex gap-2">
+          <button @click="scanAllCompetitors()" :disabled="competitorScanRunning"
+            class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-1">
+            <span x-show="competitorScanRunning" class="animate-spin">⏳</span>
+            <span x-show="!competitorScanRunning">🔍</span>
+            <span x-text="competitorScanRunning ? 'Scanning...' : 'Scan All Competitors'"></span>
+          </button>
+          <button @click="loadPriceMatrix(1)" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm">
+            🔄 Refresh
+          </button>
+        </div>
       </div>
 
       <div x-show="!priceMatrix.competitors || priceMatrix.competitors.length === 0" class="bg-white dark:bg-gray-800 rounded-xl shadow p-12 text-center text-gray-400">
         <div class="text-4xl mb-3">💰</div>
         <div class="font-semibold">No competitor prices yet</div>
-        <div class="text-sm mt-1">Run a competitor scan first to populate price data.</div>
-        <button @click="currentView='competitors'; $nextTick(() => {})" class="mt-4 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm">
-          Go to Competitors →
-        </button>
+        <div class="text-sm mt-1">Run a competitor scan to populate price data.</div>
+        <div class="flex justify-center gap-3 mt-4">
+          <button @click="scanAllCompetitors()" :disabled="competitorScanRunning"
+            class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm">
+            <span x-text="competitorScanRunning ? '⏳ Scanning...' : '🔍 Scan All Competitors'"></span>
+          </button>
+          <button @click="currentView='competitors'" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm">
+            Manage Competitors →
+          </button>
+        </div>
       </div>
 
       <div x-show="priceMatrix.competitors && priceMatrix.competitors.length > 0">
@@ -1324,9 +1338,15 @@
                       <span x-show="!row.by_competitor[comp.domain]?.price" class="text-gray-300">—</span>
                     </td>
                   </template>
-                  <td class="px-3 py-2">
+                  <td class="px-3 py-2 flex items-center gap-2">
+                    <button @click="scanAllCompetitors()" :disabled="competitorScanRunning"
+                      class="text-xs text-blue-500 hover:text-blue-700 disabled:opacity-40"
+                      title="Scan all competitors for updated prices">
+                      <span x-show="competitorScanRunning">⏳</span>
+                      <span x-show="!competitorScanRunning">🔍 Scan</span>
+                    </button>
                     <button @click="window.open(`/api/reports/price-comparison/${row.product_id}`, '_blank')"
-                      class="text-xs text-blue-500 hover:text-blue-700">Report</button>
+                      class="text-xs text-gray-400 hover:text-blue-700">Report</button>
                   </td>
                 </tr>
               </template>
