@@ -292,6 +292,9 @@ class CompetitorScrapingProfile(Base):
     last_success_at = Column(DateTime)
     best_product_count = Column(Integer, default=0)
 
+    # No-results cooldown (auto-learned): set when scan returns 0 products with 0 errors
+    last_empty_scan_at = Column(DateTime)
+
     # Manual notes
     notes = Column(Text)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())

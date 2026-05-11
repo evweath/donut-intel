@@ -116,6 +116,8 @@ function app() {
     bulkImportSessionName: '',
     competitorScanForm: { ids: [], session_name: '', find_similar: false, max_pages: 100, criteria: {} },
     competitorScanRunning: false,
+    webSearchRunning: false,
+    webSearchMaxResults: 20,
     competitorProfile: null,
     competitorProfileSaving: false,
     productSort: { col: '', dir: 'asc' },
@@ -871,6 +873,23 @@ function app() {
       await this.scanCompetitors(ids);
     },
 
+    async startWebSearchScan() {
+      if (this.webSearchRunning) return;
+      const n = Math.max(1, Math.min(100, parseInt(this.webSearchMaxResults) || 20));
+      this.webSearchMaxResults = n;
+      this.webSearchRunning = true;
+      try {
+        await this.api('/api/competitors/web-search-scan', {
+          method: 'POST',
+          body: JSON.stringify({ max_results: n }),
+        });
+        this.toast(`Web search scan started (top ${n} results per product)`, 'info');
+      } catch (e) {
+        this.webSearchRunning = false;
+        this.toast('Failed to start web search scan: ' + e.message, 'error');
+      }
+    },
+
     async openCompetitor(comp) {
       try {
         this.competitorDetail = await this.api(`/api/competitors/${comp.id}`);
@@ -1222,6 +1241,19 @@ function app() {
         case 'competitor_scan_error':
           this.competitorScanRunning = false;
           this.toast(`Competitor scan error: ${msg.error}`, 'error'); break;
+        case 'web_search_product_done':
+          if (msg.matches_found > 0)
+            this.toast(`${msg.product_title?.slice(0,40)}: ${msg.matches_found} match(es) found`, 'success', 2500);
+          break;
+        case 'web_search_scan_complete':
+          this.webSearchRunning = false;
+          this.toast(`Web search scan complete — ${msg.total_matches_in_db} total matches in DB`, 'success');
+          this.loadCompetitors(); this.loadStats();
+          if (this.currentView === 'pricing') this.loadPriceMatrix(this.priceMatrixPage);
+          break;
+        case 'web_search_scan_error':
+          this.webSearchRunning = false;
+          this.toast(`Web search scan error: ${msg.error}`, 'error'); break;
         case 'ai_categorize_complete':
           this.toast(`AI categorized ${msg.categorized}/${msg.total} products`, 'success');
           this.loadProducts(); break;

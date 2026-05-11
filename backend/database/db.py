@@ -50,12 +50,31 @@ def get_engine() -> Engine:
     return engine
 
 
+_MIGRATIONS = [
+    # (table, column, sql_type)  — run ALTER TABLE idempotently on startup
+    ("competitor_scraping_profiles", "last_empty_scan_at", "DATETIME"),
+]
+
+
+def _run_migrations(engine: Engine) -> None:
+    """Add columns that may be missing from pre-existing tables (SQLite ALTER TABLE)."""
+    with engine.connect() as conn:
+        for table, col, col_type in _MIGRATIONS:
+            try:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"))
+                conn.commit()
+                logger.info("Migration: added %s.%s", table, col)
+            except Exception:
+                pass  # Column already exists — normal on subsequent startups
+
+
 def init_db() -> Engine:
     """Initialize DB: create engine, tables, return engine."""
     global _engine, _SessionLocal
     _engine = get_engine()
     _SessionLocal = sessionmaker(bind=_engine, autocommit=False, autoflush=False)
     Base.metadata.create_all(_engine)
+    _run_migrations(_engine)
     logger.info("Database initialized")
     return _engine
 

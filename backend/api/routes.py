@@ -659,6 +659,16 @@ def list_competitors(
         query.order_by(Competitor.domain)
         .offset((page - 1) * per_page).limit(per_page).all()
     )
+    now = datetime.utcnow()
+    def _cooldown_until(c: Competitor) -> Optional[str]:
+        p = c.scraping_profile
+        if p and p.last_empty_scan_at:
+            from datetime import timedelta
+            until = p.last_empty_scan_at + timedelta(days=3)
+            if until > now:
+                return until.isoformat()
+        return None
+
     return {
         "total": total,
         "competitors": [
@@ -670,6 +680,7 @@ def list_competitors(
                 "scan_session_name": c.scan_session_name,
                 "is_active": c.is_active,
                 "scan_count": len(c.scans),
+                "cooldown_until": _cooldown_until(c),
             }
             for c in competitors
         ],
@@ -740,6 +751,38 @@ async def start_competitor_scan(req: StartCompetitorScanRequest, db: Session = D
 
     asyncio.create_task(do_scans())
     return {"status": "scan_started", "competitor_ids": req.competitor_ids, "session_name": session_name}
+
+
+class WebSearchScanRequest(BaseModel):
+    session_name: Optional[str] = None
+    max_results: int = 20           # URLs to visit per product (1–100)
+    product_ids: Optional[List[int]] = None   # None = all active products
+    force: bool = False             # ignore 3-day cooldown
+
+
+@router.post("/api/competitors/web-search-scan")
+async def start_web_search_scan(req: WebSearchScanRequest):
+    """Primary scan method: search 4 engines per product, visit result pages, store matches."""
+    session_name = req.session_name or f"Web Search {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+    max_results = max(1, min(100, req.max_results))
+
+    async def _run():
+        from backend.competitor.web_search_scan import run_web_search_scan
+        try:
+            result = await run_web_search_scan(
+                session_name=session_name,
+                max_results=max_results,
+                product_ids=req.product_ids,
+                force=req.force,
+                callbacks=[lambda e, d: manager.broadcast({"event": e, **d})],
+            )
+            await manager.broadcast({"event": "web_search_scan_complete", **result})
+        except Exception as exc:
+            logger.exception("Web search scan failed: %s", exc)
+            await manager.broadcast({"event": "web_search_scan_error", "error": str(exc)})
+
+    asyncio.create_task(_run())
+    return {"status": "scan_started", "session_name": session_name, "max_results": max_results}
 
 
 @router.delete("/api/competitors/{competitor_id}")

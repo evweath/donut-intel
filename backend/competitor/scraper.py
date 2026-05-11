@@ -146,6 +146,25 @@ async def run_competitor_scan(
                     "next_allowed_at": next_allowed.isoformat(),
                 }
 
+        # 3-day empty-scan cooldown: skip if last clean (0-product, 0-error) scan was recent
+        from datetime import timedelta
+        if profile.last_empty_scan_at:
+            cooldown_until = profile.last_empty_scan_at + timedelta(days=3)
+            if datetime.utcnow() < cooldown_until:
+                logger.info(
+                    "Skipping %s — 3-day empty-scan cooldown (resets %s)",
+                    competitor.domain, cooldown_until.date().isoformat()
+                )
+                return {
+                    "scan_id": None,
+                    "competitor": competitor.domain,
+                    "products_scraped": 0,
+                    "matches_found": 0,
+                    "skipped": True,
+                    "skipped_reason": "empty_scan_cooldown",
+                    "cooldown_until": cooldown_until.isoformat(),
+                }
+
         # Apply profile overrides
         effective_max_pages = profile.max_pages_per_scan or max_pages
         effective_delay_ms = profile.request_delay_ms if profile.request_delay_ms is not None else 0
@@ -308,6 +327,13 @@ async def run_competitor_scan(
             profile.consecutive_failures = 0
             if len(scraped_products) > (profile.best_product_count or 0):
                 profile.best_product_count = len(scraped_products)
+            # Track empty scans: 0 products found with 0 errors → start 3-day cooldown
+            if len(scraped_products) == 0 and comp_scan.errors == 0:
+                profile.last_empty_scan_at = now
+                logger.info(
+                    "%s: 0 products found (no errors) — 3-day cooldown started",
+                    competitor.domain
+                )
 
             await emit("competitor_scan_complete", {
                 "competitor": competitor.domain,
