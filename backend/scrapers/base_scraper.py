@@ -300,7 +300,7 @@ class BaseScraper:
                     pass
             exc_str = str(exc)
             if any(e in exc_str for e in self._CONTEXT_ERRORS):
-                logger.warning(f"Context error on {url}: {exc_str} — resetting browser")
+                logger.warning(f"Context error on {url}: {exc_str}")
                 await self._reset_context()
             if retry < self.max_retries:
                 wait = self.delay * (retry + 2)
