@@ -1,26 +1,50 @@
-# Session State — 2026-05-10T13:50:00-05:00
+# Session State — 2026-05-11T14:30:00
 
 ## Accomplished This Session
-- Added `## Session Continuity` section to `~/.claude/CLAUDE.md` — rules for reading SESSION.md at startup and writing it before exit
-- Created `.claude/SESSION.md` (this file) in the project directory for per-project session continuity
-- Confirmed SESSION.md is committed to git automatically by the existing Stop hook (`git add -A && git commit`)
-- SESSION.md was auto-committed at 13:39 by the Stop hook (commit `27a9833`)
+
+- Fixed competitor deletion bug (missing `db.commit()`, missing `is_active` filter)
+- Added checkboxes + Select All + Delete Selected to duplicate review screen
+- Added domain filter checkboxes to dedup Run button
+- Added "Select All on All Pages" for duplicates and source products
+- Added Source Products browser with bulk deactivation
+- Ensured all 3 source domains appear consistently on all screens
+- Added 4 new features: enhanced dashboard (scan phase + log tail), Find This Product, Beat This Price, Find Me New Customers
+- Fixed ddgs package rename (`duckduckgo-search` → `ddgs`), pinned `backend='duckduckgo'` to avoid failing fallback engines
+- Suppressed noisy ddgs INFO logs in app.py
+- Added "Scan All Competitors" and per-row "Scan" buttons to price comparison matrix
+- Fixed log-tail poll timer to stop on 401 (session expiry) instead of flooding
+- Tightened monitor filter to only catch `[ERROR]`/`[WARNING]` structured log lines
+- Deleted unreachable competitor `actionsales.com` (ID 11)
+- Added per-competitor scraping profile with auto-learning:
+  - Platform detection (Shopify API vs Playwright)
+  - 429/rate-limit tracking (timestamp + count)
+  - Failure tracking (consecutive failures + last error message)
+  - Success tracking (last success date + best product count)
+  - Editable rules: min crawl interval, request delay ms, max pages, scraper method, notes
+  - UI panel in competitor detail modal (`frontend/index.html:1980+`)
+- Fixed uvicorn binding from `0.0.0.0` to `127.0.0.1` (localhost only)
 
 ## In Progress
-- Nothing — session continuity system is fully set up and working; user asked to start a new session to test it
+
+- Nothing actively in progress
 
 ## Next Steps
-- **This is a test** — the user started a fresh session to verify that Claude reads this file at startup and orients itself correctly
-- After confirming the system works, resume whatever feature work was previously underway on the Donut Intel Platform
-- Likely next work areas based on recent commits: frontend (`frontend/js/app.js`, `frontend/index.html`) or scan cycle state machine (`backend/api/routes.py` ~969+)
+
+- Restart service: `nohup uvicorn backend.app:app --host 127.0.0.1 --port 8743 --ssl-keyfile certs/key.pem --ssl-certfile certs/cert.pem >> logs/uvicorn.log 2>&1 &`
+- Restart monitor: `tail -f logs/uvicorn.log | grep --line-buffered -E "\[ERROR\]|\[WARNING\]|\[CRITICAL\]|Traceback|Exception"`
+- Consider setting `request_delay_ms` on `restaurantsupply.com` scraping profile (hit 429 at page 36 during this session)
+- rfbakery.com and chefstore.com fail on sitemap fetches — investigate or delete if consistently unreachable
 
 ## Key Context
-- **Stack**: FastAPI + vanilla JS frontend, SQLAlchemy ORM, Python 3.13, `.venv/`
-- **Server**: runs on port 8742 (`./start.sh` / `./stop.sh`)
-- **Main route file**: `backend/api/routes.py` (~1180 lines) — all API endpoints
-- **Async task manager**: `backend/tasks/manager.py` — singleton `task_manager` imported into routes at line 70
-- **WebSocket**: `/ws/scan-progress`, `ConnectionManager` at `routes.py:68`
-- **Dedup engine**: `backend/dedup/engine.py` → `DeduplicationEngine`
-- **Session backup**: Stop hook auto-runs `git add -A && git commit` + rsync to `~/.claude_home/donut-intel/`
-- **Project-level Claude settings**: `.claude/settings.local.json` (permission allowlist, not secrets)
-- `.claude/SESSION.md` is tracked in git — committed on every session end
+
+- Service: `https://127.0.0.1:8743` (self-signed cert, localhost only)
+- Auth: admin / changeme (session-based cookies)
+- DB: `data/donut_intel.db` (SQLite WAL mode)
+- Source domains: donut-supplies.com, donut-equipment.com, bakerywholesalers.com
+- Active competitors: ald.kitchen, bakemark.com, bakesupplyplus.com, chefstore.com, chefstoys.com, ckitchen.com, discountbakeryequip.com, katom.com, restaurantsupply.com, restaurantware.com, rfbakery.com
+- ddgs package (not duckduckgo-search) — always pass `backend='duckduckgo'`
+- Monitor task ID changes each session — always start a fresh Monitor
+- git remote: github.com:evweath/donut-intel.git, branch: main
+- All changes committed and pushed at `947cd47`
+- Scraping profile model: `backend/database/models.py:CompetitorScrapingProfile`
+- Scraping profile API: `GET/PUT /api/competitors/{id}/profile` (`backend/api/routes.py:~765`)
