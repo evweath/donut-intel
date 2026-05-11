@@ -118,6 +118,12 @@ function app() {
     competitorScanRunning: false,
     competitorProfile: null,
     competitorProfileSaving: false,
+    productSort: { col: '', dir: 'asc' },
+    competitorSort: { col: '', dir: 'asc' },
+    dupSort: { col: '', dir: 'asc' },
+    sourceProductSort: { col: '', dir: 'asc' },
+    competitorCols: ['domain', 'matches', 'session', 'last_scanned'],
+    competitorDragFrom: null,
     competitorScanCriteria: {
       use_model_number: true, use_manufacturer: true, use_title_fuzzy: true,
       use_title_exact: true, use_price: false, fuzzy_threshold: 70,
@@ -899,6 +905,84 @@ function app() {
       } finally {
         this.competitorProfileSaving = false;
       }
+    },
+
+    _sortRows(rows, col, dir, accessor) {
+      if (!col) return rows;
+      return [...rows].sort((a, b) => {
+        const av = accessor(a, col), bv = accessor(b, col);
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        const cmp = (typeof av === 'number' && typeof bv === 'number')
+          ? av - bv
+          : String(av).localeCompare(String(bv), undefined, { sensitivity: 'base' });
+        return dir === 'asc' ? cmp : -cmp;
+      });
+    },
+    setSort(state, col) {
+      if (state.col === col) state.dir = state.dir === 'asc' ? 'desc' : 'asc';
+      else { state.col = col; state.dir = 'asc'; }
+    },
+    sortIcon(state, col) {
+      if (state.col !== col) return '⇅';
+      return state.dir === 'asc' ? '↑' : '↓';
+    },
+    sortedProducts() {
+      const rows = this.productData?.products || [];
+      return this._sortRows(rows, this.productSort.col, this.productSort.dir, (p, col) => {
+        if (col === 'title') return p.title || '';
+        if (col === 'manufacturer') return p.manufacturer || '';
+        if (col === 'model_number') return p.model_number || '';
+        if (col === 'price') return p.price || 0;
+        if (col === 'sites') return (p.sources || []).length;
+        return '';
+      });
+    },
+    sortedCompetitors() {
+      const rows = this.competitors?.competitors || [];
+      return this._sortRows(rows, this.competitorSort.col, this.competitorSort.dir, (c, col) => {
+        if (col === 'domain') return c.domain || '';
+        if (col === 'matches') return c.total_matching_products || 0;
+        if (col === 'session') return c.scan_session_name || '';
+        if (col === 'last_scanned') return c.last_scanned_at || '';
+        return '';
+      });
+    },
+    sortedDups() {
+      const rows = this.duplicates?.candidates || [];
+      return this._sortRows(rows, this.dupSort.col, this.dupSort.dir, (d, col) => {
+        if (col === 'confidence_score') return d.confidence_score || 0;
+        if (col === 'primary_title') return d.primary?.title || '';
+        if (col === 'secondary_title') return d.secondary?.title || '';
+        return '';
+      });
+    },
+    sortedSourceProducts() {
+      const rows = this.sourceProducts?.products || [];
+      return this._sortRows(rows, this.sourceProductSort.col, this.sourceProductSort.dir, (p, col) => {
+        if (col === 'title') return p.canonical_title || p.title || '';
+        if (col === 'manufacturer') return p.manufacturer || '';
+        if (col === 'model_number') return p.model_number || '';
+        if (col === 'price') return p.price_canonical ? Number(p.price_canonical) : 0;
+        if (col === 'category') return p.category || '';
+        return '';
+      });
+    },
+    competitorColLabel(col) {
+      const labels = { domain: 'Domain', matches: 'Matches', session: 'Session', last_scanned: 'Last Scanned' };
+      return labels[col] || col;
+    },
+    competitorColDrop(toCol) {
+      if (!this.competitorDragFrom || this.competitorDragFrom === toCol) { this.competitorDragFrom = null; return; }
+      const cols = [...this.competitorCols];
+      const fi = cols.indexOf(this.competitorDragFrom);
+      const ti = cols.indexOf(toCol);
+      if (fi < 0 || ti < 0) { this.competitorDragFrom = null; return; }
+      cols.splice(fi, 1);
+      cols.splice(ti, 0, this.competitorDragFrom);
+      this.competitorCols = cols;
+      this.competitorDragFrom = null;
     },
 
     async deleteCompetitor(id) {

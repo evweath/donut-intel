@@ -285,16 +285,16 @@
           <table class="w-full text-sm">
             <thead class="bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
               <tr>
-                <th class="text-left px-4 py-3 font-semibold">Product</th>
-                <th class="text-left px-4 py-3 font-semibold hidden lg:table-cell">Manufacturer</th>
-                <th class="text-left px-4 py-3 font-semibold hidden lg:table-cell">Model</th>
-                <th class="text-right px-4 py-3 font-semibold">Price</th>
-                <th class="text-center px-4 py-3 font-semibold hidden md:table-cell">Sites</th>
+                <th class="text-left px-4 py-3 font-semibold cursor-pointer select-none hover:text-orange-500" @click="setSort(productSort, 'title')">Product <span x-text="sortIcon(productSort, 'title')" class="text-xs opacity-60"></span></th>
+                <th class="text-left px-4 py-3 font-semibold hidden lg:table-cell cursor-pointer select-none hover:text-orange-500" @click="setSort(productSort, 'manufacturer')">Manufacturer <span x-text="sortIcon(productSort, 'manufacturer')" class="text-xs opacity-60"></span></th>
+                <th class="text-left px-4 py-3 font-semibold hidden lg:table-cell cursor-pointer select-none hover:text-orange-500" @click="setSort(productSort, 'model_number')">Model <span x-text="sortIcon(productSort, 'model_number')" class="text-xs opacity-60"></span></th>
+                <th class="text-right px-4 py-3 font-semibold cursor-pointer select-none hover:text-orange-500" @click="setSort(productSort, 'price')">Price <span x-text="sortIcon(productSort, 'price')" class="text-xs opacity-60"></span></th>
+                <th class="text-center px-4 py-3 font-semibold hidden md:table-cell cursor-pointer select-none hover:text-orange-500" @click="setSort(productSort, 'sites')">Sites <span x-text="sortIcon(productSort, 'sites')" class="text-xs opacity-60"></span></th>
                 <th class="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
-              <template x-for="p in productData.products" :key="p.id">
+              <template x-for="p in sortedProducts()" :key="p.id">
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer" @click="openProduct(p)">
                   <td class="px-4 py-3">
                     <div class="flex items-center gap-3">
@@ -512,13 +512,33 @@
         </div>
       </div>
 
+      <!-- Sort bar -->
+      <div x-show="duplicates.candidates && duplicates.candidates.length > 0" class="flex items-center gap-2 flex-wrap">
+        <span class="text-xs text-gray-500 font-medium">Sort:</span>
+        <button @click="setSort(dupSort, 'confidence_score')"
+          :class="dupSort.col === 'confidence_score' ? 'bg-orange-500 text-white' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'"
+          class="text-xs px-3 py-1.5 rounded border border-gray-200 dark:border-gray-600 font-medium transition-colors">
+          Confidence <span x-text="sortIcon(dupSort, 'confidence_score')" class="opacity-80"></span>
+        </button>
+        <button @click="setSort(dupSort, 'primary_title')"
+          :class="dupSort.col === 'primary_title' ? 'bg-orange-500 text-white' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'"
+          class="text-xs px-3 py-1.5 rounded border border-gray-200 dark:border-gray-600 font-medium transition-colors">
+          Primary Title <span x-text="sortIcon(dupSort, 'primary_title')" class="opacity-80"></span>
+        </button>
+        <button @click="setSort(dupSort, 'secondary_title')"
+          :class="dupSort.col === 'secondary_title' ? 'bg-orange-500 text-white' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'"
+          class="text-xs px-3 py-1.5 rounded border border-gray-200 dark:border-gray-600 font-medium transition-colors">
+          Secondary Title <span x-text="sortIcon(dupSort, 'secondary_title')" class="opacity-80"></span>
+        </button>
+      </div>
+
       <div x-show="duplicates.candidates && duplicates.candidates.length === 0" class="bg-white dark:bg-gray-800 rounded-xl shadow p-12 text-center text-gray-400">
         <div class="text-4xl mb-2">✅</div>
         <div>No pending duplicates.</div>
       </div>
 
       <div class="space-y-3">
-        <template x-for="dup in duplicates.candidates" :key="dup.id">
+        <template x-for="dup in sortedDups()" :key="dup.id">
           <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4"
             :class="dupSelected[dup.id] ? 'ring-2 ring-blue-400' : ''">
 
@@ -659,15 +679,15 @@
           <thead class="bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
             <tr>
               <th class="w-8 px-3 py-3"></th>
-              <th class="px-4 py-3 text-left font-semibold text-gray-600 dark:text-gray-300">Product</th>
-              <th class="px-4 py-3 text-left font-semibold text-gray-600 dark:text-gray-300">Manufacturer</th>
-              <th class="px-4 py-3 text-left font-semibold text-gray-600 dark:text-gray-300">Model #</th>
-              <th class="px-4 py-3 text-right font-semibold text-gray-600 dark:text-gray-300">Price</th>
-              <th class="px-4 py-3 text-left font-semibold text-gray-600 dark:text-gray-300">Category</th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-600 dark:text-gray-300 cursor-pointer select-none hover:text-orange-500" @click="setSort(sourceProductSort, 'title')">Product <span x-text="sortIcon(sourceProductSort, 'title')" class="text-xs opacity-60"></span></th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-600 dark:text-gray-300 cursor-pointer select-none hover:text-orange-500" @click="setSort(sourceProductSort, 'manufacturer')">Manufacturer <span x-text="sortIcon(sourceProductSort, 'manufacturer')" class="text-xs opacity-60"></span></th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-600 dark:text-gray-300 cursor-pointer select-none hover:text-orange-500" @click="setSort(sourceProductSort, 'model_number')">Model # <span x-text="sortIcon(sourceProductSort, 'model_number')" class="text-xs opacity-60"></span></th>
+              <th class="px-4 py-3 text-right font-semibold text-gray-600 dark:text-gray-300 cursor-pointer select-none hover:text-orange-500" @click="setSort(sourceProductSort, 'price')">Price <span x-text="sortIcon(sourceProductSort, 'price')" class="text-xs opacity-60"></span></th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-600 dark:text-gray-300 cursor-pointer select-none hover:text-orange-500" @click="setSort(sourceProductSort, 'category')">Category <span x-text="sortIcon(sourceProductSort, 'category')" class="text-xs opacity-60"></span></th>
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
-            <template x-for="p in sourceProducts.products" :key="p.id">
+            <template x-for="p in sortedSourceProducts()" :key="p.id">
               <tr :class="sourceProductSelected[p.id] ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'"
                 class="cursor-pointer" @click="sourceProductSelected = { ...sourceProductSelected, [p.id]: !sourceProductSelected[p.id] }">
                 <td class="px-3 py-3">
@@ -1201,21 +1221,58 @@
             ▶ Scan All
           </button>
         </div>
-        <table class="w-full text-sm">
-          <thead class="bg-gray-50 dark:bg-gray-700 text-gray-500 text-xs">
-            <tr>
-              <th class="text-left px-4 py-2">Domain</th>
-              <th class="text-center px-4 py-2 hidden md:table-cell">Matches</th>
-              <th class="text-left px-4 py-2 hidden lg:table-cell">Session</th>
-              <th class="text-left px-4 py-2 hidden lg:table-cell">Last Scanned</th>
-              <th class="px-4 py-2"></th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
-            <template x-for="c in competitors.competitors" :key="c.id">
-              <tr :class="competitorEditId === c.id ? 'bg-yellow-50 dark:bg-yellow-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'">
-                <!-- Edit form: single spanning cell, shown only when editing this row -->
-                <td x-show="competitorEditId === c.id" colspan="5" class="px-4 py-2">
+        <!-- Competitor list as flex rows to support drag-to-reorder columns -->
+        <div class="text-sm">
+          <!-- Header row -->
+          <div class="flex items-center bg-gray-50 dark:bg-gray-700 text-gray-500 text-xs border-b border-gray-200 dark:border-gray-600">
+            <div :style="{ order: competitorCols.indexOf('domain') }"
+              class="flex-1 min-w-0 px-4 py-2 font-semibold cursor-pointer select-none hover:text-orange-500 transition-colors"
+              :class="competitorDragFrom === 'domain' ? 'opacity-40' : ''"
+              draggable="true"
+              @dragstart="competitorDragFrom = 'domain'"
+              @dragover.prevent
+              @drop.prevent="competitorColDrop('domain')"
+              @click="setSort(competitorSort, 'domain')">
+              Domain <span x-text="sortIcon(competitorSort, 'domain')" class="opacity-60"></span>
+            </div>
+            <div :style="{ order: competitorCols.indexOf('matches') }"
+              class="w-24 flex-shrink-0 px-4 py-2 font-semibold text-center cursor-pointer select-none hover:text-orange-500 transition-colors hidden md:block"
+              :class="competitorDragFrom === 'matches' ? 'opacity-40' : ''"
+              draggable="true"
+              @dragstart="competitorDragFrom = 'matches'"
+              @dragover.prevent
+              @drop.prevent="competitorColDrop('matches')"
+              @click="setSort(competitorSort, 'matches')">
+              Matches <span x-text="sortIcon(competitorSort, 'matches')" class="opacity-60"></span>
+            </div>
+            <div :style="{ order: competitorCols.indexOf('session') }"
+              class="flex-1 min-w-0 px-4 py-2 font-semibold cursor-pointer select-none hover:text-orange-500 transition-colors hidden lg:block"
+              :class="competitorDragFrom === 'session' ? 'opacity-40' : ''"
+              draggable="true"
+              @dragstart="competitorDragFrom = 'session'"
+              @dragover.prevent
+              @drop.prevent="competitorColDrop('session')"
+              @click="setSort(competitorSort, 'session')">
+              Session <span x-text="sortIcon(competitorSort, 'session')" class="opacity-60"></span>
+            </div>
+            <div :style="{ order: competitorCols.indexOf('last_scanned') }"
+              class="w-36 flex-shrink-0 px-4 py-2 font-semibold cursor-pointer select-none hover:text-orange-500 transition-colors hidden lg:block"
+              :class="competitorDragFrom === 'last_scanned' ? 'opacity-40' : ''"
+              draggable="true"
+              @dragstart="competitorDragFrom = 'last_scanned'"
+              @dragover.prevent
+              @drop.prevent="competitorColDrop('last_scanned')"
+              @click="setSort(competitorSort, 'last_scanned')">
+              Last Scanned <span x-text="sortIcon(competitorSort, 'last_scanned')" class="opacity-60"></span>
+            </div>
+            <div style="order: 99" class="flex-shrink-0 px-4 py-2 w-64"></div>
+          </div>
+          <!-- Data rows -->
+          <div class="divide-y divide-gray-100 dark:divide-gray-700">
+            <template x-for="c in sortedCompetitors()" :key="c.id">
+              <div :class="competitorEditId === c.id ? 'bg-yellow-50 dark:bg-yellow-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'">
+                <!-- Edit form row -->
+                <div x-show="competitorEditId === c.id" class="px-4 py-2">
                   <div class="flex items-center gap-2 flex-wrap">
                     <span class="font-medium text-sm text-gray-600 dark:text-gray-300" x-text="c.domain"></span>
                     <input x-model="competitorEditForm.name" placeholder="Display name"
@@ -1227,37 +1284,40 @@
                     <button @click="cancelEditCompetitor()"
                       class="text-xs bg-gray-200 hover:bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded">Cancel</button>
                   </div>
-                </td>
-                <!-- Normal cells, hidden when this row is being edited -->
-                <td x-show="competitorEditId !== c.id" class="px-4 py-2">
-                  <div class="font-medium" x-text="c.domain"></div>
-                  <div class="text-xs text-gray-400" x-text="c.name || ''"></div>
-                </td>
-                <td x-show="competitorEditId !== c.id" class="px-4 py-2 text-center hidden md:table-cell">
-                  <span class="bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full text-xs font-bold"
-                    x-text="c.total_matching_products || 0"></span>
-                </td>
-                <td x-show="competitorEditId !== c.id" class="px-4 py-2 text-xs text-gray-400 hidden lg:table-cell" x-text="c.scan_session_name || '—'"></td>
-                <td x-show="competitorEditId !== c.id" class="px-4 py-2 text-xs text-gray-400 hidden lg:table-cell"
-                  x-text="c.last_scanned_at ? new Date(c.last_scanned_at).toLocaleDateString() : 'Never'"></td>
-                <td x-show="competitorEditId !== c.id" class="px-4 py-2 text-right">
-                  <div class="flex gap-1 justify-end">
-                    <button @click="scanCompetitors([c.id])"
-                      class="text-xs bg-orange-100 hover:bg-orange-200 text-orange-700 px-2 py-1 rounded">Scan</button>
-                    <button @click="openCompetitor(c)"
-                      class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">Detail</button>
-                    <button @click="startEditCompetitor(c)"
-                      class="text-xs bg-yellow-100 hover:bg-yellow-200 text-yellow-700 px-2 py-1 rounded">Edit</button>
-                    <button @click="deleteCompetitor(c.id)"
-                      class="text-xs bg-red-100 hover:bg-red-200 text-red-700 px-2 py-1 rounded">Delete</button>
-                    <button @click="window.open(`/api/reports/competitor/${c.id}`, '_blank')"
-                      class="text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 px-2 py-1 rounded">Report</button>
+                </div>
+                <!-- Normal row -->
+                <div x-show="competitorEditId !== c.id" class="flex items-center">
+                  <div :style="{ order: competitorCols.indexOf('domain') }" class="flex-1 min-w-0 px-4 py-2">
+                    <div class="font-medium" x-text="c.domain"></div>
+                    <div class="text-xs text-gray-400" x-text="c.name || ''"></div>
                   </div>
-                </td>
-              </tr>
+                  <div :style="{ order: competitorCols.indexOf('matches') }" class="w-24 flex-shrink-0 px-4 py-2 text-center hidden md:block">
+                    <span class="bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full text-xs font-bold"
+                      x-text="c.total_matching_products || 0"></span>
+                  </div>
+                  <div :style="{ order: competitorCols.indexOf('session') }" class="flex-1 min-w-0 px-4 py-2 text-xs text-gray-400 hidden lg:block truncate"
+                    x-text="c.scan_session_name || '—'"></div>
+                  <div :style="{ order: competitorCols.indexOf('last_scanned') }" class="w-36 flex-shrink-0 px-4 py-2 text-xs text-gray-400 hidden lg:block"
+                    x-text="c.last_scanned_at ? new Date(c.last_scanned_at).toLocaleDateString() : 'Never'"></div>
+                  <div style="order: 99" class="flex-shrink-0 px-4 py-2">
+                    <div class="flex gap-1 justify-end">
+                      <button @click="scanCompetitors([c.id])"
+                        class="text-xs bg-orange-100 hover:bg-orange-200 text-orange-700 px-2 py-1 rounded">Scan</button>
+                      <button @click="openCompetitor(c)"
+                        class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-2 py-1 rounded">Detail</button>
+                      <button @click="startEditCompetitor(c)"
+                        class="text-xs bg-yellow-100 hover:bg-yellow-200 text-yellow-700 px-2 py-1 rounded">Edit</button>
+                      <button @click="deleteCompetitor(c.id)"
+                        class="text-xs bg-red-100 hover:bg-red-200 text-red-700 px-2 py-1 rounded">Delete</button>
+                      <button @click="window.open(`/api/reports/competitor/${c.id}`, '_blank')"
+                        class="text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 px-2 py-1 rounded">Report</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </template>
-          </tbody>
-        </table>
+          </div>
+        </div>
         <div x-show="!competitors.competitors || competitors.competitors.length === 0" class="text-center py-8 text-gray-400 text-sm">
           No competitors tracked yet. Use Auto-Discover or Bulk Import to add them.
         </div>
