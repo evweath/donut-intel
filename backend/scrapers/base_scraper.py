@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
@@ -145,12 +146,15 @@ class BaseScraper:
         self.session_id = session_id
         self.delay: float = config.get("scraping", "delay_between_requests", default=2.0)
         self.max_retries: int = config.get("scraping", "max_retries", default=3)
-        self.timeout_ms: int = config.get("scraping", "timeout_seconds", default=30) * 1000
+        self.timeout_ms: int = config.get("scraping", "timeout_seconds", default=60) * 1000
         self.headless: bool = config.get("scraping", "headless", default=True)
         self._consecutive_failures: int = 0
         self._circuit_breaker_threshold: int = config.get("scraping", "circuit_breaker_threshold", default=10)
         self._circuit_breaker_pause: int = config.get("scraping", "circuit_breaker_pause_seconds", default=300)
         self._context_error_count: int = 0
+        # Contamination detection: fast-fails (< 1.5s) indicate a broken context, not a slow server
+        self._fast_fail_count: int = 0
+        self._fast_fail_threshold: int = config.get("scraping", "fast_fail_threshold", default=3)
 
         # Resolve browser profile
         active = profile_name or config.get("browser", "default_profile", default="chrome_mac")
@@ -259,6 +263,7 @@ class BaseScraper:
     async def _reset_context(self) -> None:
         """Rebuild the browser context. Escalates to full browser restart after 2 consecutive failures."""
         self._context_error_count += 1
+        self._fast_fail_count = 0  # reset contamination counter after rebuild
         if self._context_error_count >= 2:
             logger.warning(f"Context rebuild failed {self._context_error_count} times — escalating to full browser restart")
             await self._reset_browser()
@@ -278,6 +283,24 @@ class BaseScraper:
         self._context.set_default_timeout(self.timeout_ms)
         logger.info("Browser context rebuilt successfully.")
 
+    async def _context_health_check(self) -> bool:
+        """Navigate to about:blank to verify the context is alive before starting a batch."""
+        page = None
+        try:
+            page = await self._new_page()
+            await page.goto("about:blank", timeout=5000)
+            await page.close()
+            return True
+        except Exception as exc:
+            logger.warning("Context health check failed (%s) — proactive rebuild before scan", exc)
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+            await self._reset_context()
+            return False
+
     async def _new_page(self) -> Page:
         return await self._context.new_page()
 
@@ -291,6 +314,7 @@ class BaseScraper:
             await asyncio.sleep(self._circuit_breaker_pause)
 
         page = None
+        t_start = time.monotonic()
         try:
             page = await self._new_page()
             await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
@@ -299,17 +323,37 @@ class BaseScraper:
             await asyncio.sleep(max(0, self.delay - 1.5))
             self._consecutive_failures = 0
             self._context_error_count = 0
+            self._fast_fail_count = 0  # clean success — context is healthy
             return page, html
         except Exception as exc:
+            elapsed = time.monotonic() - t_start
             if page:
                 try:
                     await page.close()
                 except Exception:
                     pass
             exc_str = str(exc)
+
+            # Contamination detection: real server timeouts take seconds; a broken
+            # context fails in milliseconds. Track fast-fails and rebuild proactively.
+            if elapsed < 1.5:
+                self._fast_fail_count += 1
+                if self._fast_fail_count >= self._fast_fail_threshold:
+                    logger.warning(
+                        "Context contamination detected (%d fast-fails in <1.5s) — "
+                        "proactive context rebuild before retry",
+                        self._fast_fail_count,
+                    )
+                    self._fast_fail_count = 0
+                    await self._reset_context()
+            else:
+                # Slow failure = genuine server/network problem, not contamination
+                self._fast_fail_count = 0
+
             if any(e in exc_str for e in self._CONTEXT_ERRORS):
-                logger.warning(f"Context error on {url}: {exc_str}")
+                logger.warning(f"Context error on {url}: {exc_str[:120]}")
                 await self._reset_context()
+
             if retry < self.max_retries:
                 wait = self.delay * (retry + 2)
                 logger.warning(f"Retry {retry + 1}/{self.max_retries} for {url}: {exc}")
@@ -682,6 +726,9 @@ class BaseScraper:
         domain = urlparse(base_url).netloc
         visited: set = set()
         product_urls: set = set()
+
+        # Verify context is clean before touching this competitor's URLs
+        await self._context_health_check()
 
         # Try sitemap first (F02)
         sitemap_urls = await self._try_sitemap(base_url, domain)
