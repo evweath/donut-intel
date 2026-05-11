@@ -155,6 +155,9 @@ class BaseScraper:
         # Contamination detection: fast-fails (< 1.5s) indicate a broken context, not a slow server
         self._fast_fail_count: int = 0
         self._fast_fail_threshold: int = config.get("scraping", "fast_fail_threshold", default=3)
+        # Tracks successful loads since last context rebuild — used to distinguish
+        # context contamination (rebuild needed) from server-side blocking (rebuild useless)
+        self._pages_since_rebuild: int = 0
 
         # Resolve browser profile
         active = profile_name or config.get("browser", "default_profile", default="chrome_mac")
@@ -258,12 +261,23 @@ class BaseScraper:
         logger.info("Launching fresh Playwright browser instance...")
         await self.start()
         self._context_error_count = 0
+        self._pages_since_rebuild = 0
         logger.info("Browser restarted successfully.")
 
     async def _reset_context(self) -> None:
-        """Rebuild the browser context. Escalates to full browser restart after 2 consecutive failures."""
+        """Rebuild only if the context had recent successes (true contamination).
+        If the context is already fresh (pages_since_rebuild==0), the error is
+        server-side blocking — skip the rebuild to avoid an infinite restart loop."""
+        self._fast_fail_count = 0
+        if self._pages_since_rebuild == 0:
+            # Context was already clean — the site is blocking us, not us contaminated
+            logger.warning(
+                "Skipping context rebuild — context is already fresh "
+                "(server-side block, not contamination)"
+            )
+            return
         self._context_error_count += 1
-        self._fast_fail_count = 0  # reset contamination counter after rebuild
+        self._pages_since_rebuild = 0
         if self._context_error_count >= 2:
             logger.warning(f"Context rebuild failed {self._context_error_count} times — escalating to full browser restart")
             await self._reset_browser()
@@ -323,7 +337,8 @@ class BaseScraper:
             await asyncio.sleep(max(0, self.delay - 1.5))
             self._consecutive_failures = 0
             self._context_error_count = 0
-            self._fast_fail_count = 0  # clean success — context is healthy
+            self._fast_fail_count = 0
+            self._pages_since_rebuild += 1  # proof the context is healthy
             return page, html
         except Exception as exc:
             elapsed = time.monotonic() - t_start
