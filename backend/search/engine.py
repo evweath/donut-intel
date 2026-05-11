@@ -46,7 +46,7 @@ async def _text_search(query: str, max_results: int) -> List[Dict[str, Any]]:
     try:
         return await _run_sync(_search)
     except Exception as exc:
-        logger.error(f"DDG text search failed: {exc}")
+        logger.debug("DDG text search failed: %s", exc)
         return []
 
 
@@ -82,6 +82,9 @@ _SEARCH_HEADERS = {
 }
 
 
+_DDG_SEARCH_LOCK = asyncio.Lock()  # serialize DDG calls to avoid rate-limit bans
+
+
 async def _bing_search(query: str, max_results: int) -> List[Dict[str, Any]]:
     """Scrape Bing SERP for result URLs."""
     try:
@@ -107,7 +110,7 @@ async def _bing_search(query: str, max_results: int) -> List[Dict[str, Any]]:
                 break
         return results
     except Exception as exc:
-        logger.warning("Bing search failed: %s", exc)
+        logger.debug("Bing search failed: %s", exc)
         return []
 
 
@@ -134,7 +137,7 @@ async def _google_search(query: str, max_results: int) -> List[Dict[str, Any]]:
                 break
         return results
     except Exception as exc:
-        logger.warning("Google search failed (expected if bot-blocked): %s", exc)
+        logger.debug("Google search failed (expected if bot-blocked): %s", exc)
         return []
 
 
@@ -159,7 +162,7 @@ async def _yahoo_search(query: str, max_results: int) -> List[Dict[str, Any]]:
                 break
         return results
     except Exception as exc:
-        logger.warning("Yahoo search failed: %s", exc)
+        logger.debug("Yahoo search failed: %s", exc)
         return []
 
 
@@ -180,7 +183,13 @@ async def multi_engine_search(
 
     tasks = []
     if 'ddg' in engines:
-        tasks.append(_text_search(f"{query} buy", max_results=fetch))
+        # Serialize DDG calls with a small delay to avoid rate-limit bans
+        async def _ddg_guarded():
+            async with _DDG_SEARCH_LOCK:
+                result = await _text_search(f"{query} buy", max_results=fetch)
+                await asyncio.sleep(1.5)
+                return result
+        tasks.append(_ddg_guarded())
     if 'bing' in engines:
         tasks.append(_bing_search(query, max_results=fetch))
     if 'google' in engines:

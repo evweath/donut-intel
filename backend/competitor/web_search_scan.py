@@ -72,13 +72,16 @@ def _build_query(product: Product) -> str:
     """Build a search query that identifies this specific product."""
     parts: List[str] = []
     if product.manufacturer and product.model_number:
-        parts.append(f'"{product.manufacturer} {product.model_number}"')
+        # Quoted model keeps it specific without over-constraining
+        parts.append(product.manufacturer)
+        parts.append(f'"{product.model_number}"')
     elif product.model_number:
         parts.append(f'"{product.model_number}"')
     else:
-        title = (product.canonical_title or '')[:80]
-        parts.append(f'"{title}"')
-    parts.append('buy price')
+        # Unquoted title — more flexible, avoids "no results" on long exact-match queries
+        title = (product.canonical_title or '')[:60]
+        parts.append(title)
+    parts.append('buy')
     return ' '.join(parts)
 
 
@@ -453,20 +456,19 @@ async def run_web_search_scan(
 
         return urls_visited, matches
 
-    # Process products with bounded concurrency
-    search_sem_outer = asyncio.Semaphore(3)  # 3 products in-flight at once to avoid hammering search engines
+    # Process products one at a time — DDG rate-limits aggressively under concurrent load
+    search_sem_outer = asyncio.Semaphore(1)
 
     async def bounded_process(snap: dict) -> None:
         async with search_sem_outer:
             visited, found = await process_product(snap)
-            total_urls_visited_local = visited
-            total_matches_local = found
             await emit('web_search_product_done', {
                 'product_id': snap['id'],
                 'product_title': snap['title'],
                 'urls_visited': visited,
                 'matches_found': found,
             })
+            await asyncio.sleep(2)  # brief pause between products to stay under DDG rate limits
 
     await asyncio.gather(*[bounded_process(snap) for snap in product_snapshots])
 
