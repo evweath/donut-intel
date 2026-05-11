@@ -1958,7 +1958,7 @@
 
     <!-- Matched Products -->
     <div class="font-semibold text-sm mb-2">Matched Products (<span x-text="competitorDetail?.matches?.length || 0"></span>)</div>
-    <div class="space-y-1 max-h-64 overflow-y-auto">
+    <div class="space-y-1 max-h-48 overflow-y-auto mb-4">
       <template x-for="m in (competitorDetail?.matches || [])" :key="m.id">
         <div class="flex items-center justify-between text-xs bg-gray-50 dark:bg-gray-700 rounded p-2">
           <div class="flex-1 min-w-0">
@@ -1975,6 +1975,84 @@
       <div x-show="!competitorDetail?.matches?.length" class="text-center text-gray-400 py-4 text-sm">
         No product matches found yet. Run a scan.
       </div>
+    </div>
+
+    <!-- Scraping Profile -->
+    <div x-show="competitorProfile" class="border-t dark:border-gray-700 pt-4">
+      <div class="font-semibold text-sm mb-3 flex items-center gap-2">
+        🔧 Scraping Profile
+        <span x-show="competitorProfile?.platform && competitorProfile.platform !== 'unknown'"
+          class="text-xs px-2 py-0.5 rounded-full"
+          :class="competitorProfile?.platform === 'shopify' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'"
+          x-text="competitorProfile?.platform === 'shopify' ? '🛒 Shopify' : '🎭 Playwright'">
+        </span>
+        <span x-show="competitorProfile?.consecutive_failures >= 3"
+          class="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+          ⚠️ <span x-text="competitorProfile?.consecutive_failures"></span> failures
+        </span>
+      </div>
+
+      <!-- Learned stats (read-only) -->
+      <div class="grid grid-cols-3 gap-2 mb-3 text-xs">
+        <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
+          <div class="text-gray-400 mb-0.5">Last Success</div>
+          <div class="font-medium" x-text="competitorProfile?.last_success_at ? new Date(competitorProfile.last_success_at).toLocaleDateString() : 'Never'"></div>
+        </div>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
+          <div class="text-gray-400 mb-0.5">Best Product Count</div>
+          <div class="font-medium" x-text="competitorProfile?.best_product_count || 0"></div>
+        </div>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded p-2">
+          <div class="text-gray-400 mb-0.5">Rate Limit Hits</div>
+          <div class="font-medium" :class="(competitorProfile?.rate_limit_count || 0) > 0 ? 'text-yellow-600' : ''" x-text="competitorProfile?.rate_limit_count || 0"></div>
+        </div>
+      </div>
+      <div x-show="competitorProfile?.last_error_message" class="text-xs bg-red-50 dark:bg-red-900/20 text-red-600 rounded p-2 mb-3 truncate">
+        Last error: <span x-text="competitorProfile?.last_error_message"></span>
+      </div>
+      <div x-show="competitorProfile?.last_429_at" class="text-xs bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 rounded p-2 mb-3">
+        Last rate-limited: <span x-text="competitorProfile?.last_429_at ? new Date(competitorProfile.last_429_at).toLocaleString() : ''"></span>
+      </div>
+
+      <!-- Editable settings -->
+      <div class="grid grid-cols-2 gap-3 text-xs mb-3">
+        <div>
+          <label class="block text-gray-500 mb-1">Scraper Method</label>
+          <select x-model="competitorProfile.preferred_scraper"
+            class="w-full border rounded px-2 py-1.5 dark:bg-gray-700 dark:border-gray-600 text-sm">
+            <option value="auto">Auto-detect</option>
+            <option value="shopify_api">Shopify API</option>
+            <option value="playwright">Playwright</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-gray-500 mb-1">Min Crawl Interval (hours)</label>
+          <input type="number" min="0" step="0.5" x-model.number="competitorProfile.min_crawl_interval_hours"
+            class="w-full border rounded px-2 py-1.5 dark:bg-gray-700 dark:border-gray-600 text-sm" />
+        </div>
+        <div>
+          <label class="block text-gray-500 mb-1">Request Delay (ms, 0 = default)</label>
+          <input type="number" min="0" step="100" :value="competitorProfile.request_delay_ms ?? 0"
+            @change="competitorProfile.request_delay_ms = $event.target.value === '' || $event.target.value == 0 ? null : parseInt($event.target.value)"
+            class="w-full border rounded px-2 py-1.5 dark:bg-gray-700 dark:border-gray-600 text-sm" />
+        </div>
+        <div>
+          <label class="block text-gray-500 mb-1">Max Pages Per Scan (0 = unlimited)</label>
+          <input type="number" min="0" :value="competitorProfile.max_pages_per_scan ?? 0"
+            @change="competitorProfile.max_pages_per_scan = $event.target.value === '' || $event.target.value == 0 ? null : parseInt($event.target.value)"
+            class="w-full border rounded px-2 py-1.5 dark:bg-gray-700 dark:border-gray-600 text-sm" />
+        </div>
+      </div>
+      <div class="mb-3">
+        <label class="block text-xs text-gray-500 mb-1">Notes</label>
+        <textarea x-model="competitorProfile.notes" rows="2"
+          placeholder="e.g. blocks bots after page 20, requires JS, blocks non-browser UA..."
+          class="w-full border rounded px-2 py-1.5 dark:bg-gray-700 dark:border-gray-600 text-xs resize-none"></textarea>
+      </div>
+      <button @click="saveCompetitorProfile()" :disabled="competitorProfileSaving"
+        class="bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-4 py-1.5 rounded text-sm">
+        <span x-text="competitorProfileSaving ? 'Saving...' : 'Save Profile'"></span>
+      </button>
     </div>
   </div>
 </div>

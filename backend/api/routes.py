@@ -24,6 +24,7 @@ from backend.database.models import (
     Competitor,
     CompetitorProductMatch,
     CompetitorScan,
+    CompetitorScrapingProfile,
     DuplicateCandidate,
     ExportRecord,
     PriceHistory,
@@ -759,6 +760,63 @@ def update_competitor(competitor_id: int, data: dict, db: Session = Depends(get_
     for k in ("name", "base_url", "notes"):
         if k in data:
             setattr(comp, k, data[k])
+    return {"status": "updated"}
+
+
+@router.get("/api/competitors/{competitor_id}/profile")
+def get_scraping_profile(competitor_id: int, db: Session = Depends(get_db_session)):
+    """Return the scraping profile for a competitor, creating a default if none exists."""
+    comp = db.get(Competitor, competitor_id)
+    if not comp:
+        raise HTTPException(status_code=404, detail="Competitor not found")
+    profile = comp.scraping_profile
+    if profile is None:
+        profile = CompetitorScrapingProfile(competitor_id=competitor_id)
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+    return {
+        "competitor_id": profile.competitor_id,
+        "platform": profile.platform,
+        "preferred_scraper": profile.preferred_scraper,
+        "min_crawl_interval_hours": profile.min_crawl_interval_hours,
+        "request_delay_ms": profile.request_delay_ms,
+        "max_pages_per_scan": profile.max_pages_per_scan,
+        "last_429_at": profile.last_429_at.isoformat() if profile.last_429_at else None,
+        "rate_limit_count": profile.rate_limit_count or 0,
+        "last_error_at": profile.last_error_at.isoformat() if profile.last_error_at else None,
+        "last_error_message": profile.last_error_message,
+        "consecutive_failures": profile.consecutive_failures or 0,
+        "last_success_at": profile.last_success_at.isoformat() if profile.last_success_at else None,
+        "best_product_count": profile.best_product_count or 0,
+        "notes": profile.notes,
+        "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,
+    }
+
+
+class ScrapingProfileUpdate(BaseModel):
+    preferred_scraper: Optional[str] = None   # shopify_api|playwright|auto
+    min_crawl_interval_hours: Optional[float] = None
+    request_delay_ms: Optional[int] = None
+    max_pages_per_scan: Optional[int] = None
+    notes: Optional[str] = None
+
+
+@router.put("/api/competitors/{competitor_id}/profile")
+def update_scraping_profile(
+    competitor_id: int, data: ScrapingProfileUpdate, db: Session = Depends(get_db_session)
+):
+    """Update editable fields of a competitor's scraping profile."""
+    comp = db.get(Competitor, competitor_id)
+    if not comp:
+        raise HTTPException(status_code=404, detail="Competitor not found")
+    profile = comp.scraping_profile
+    if profile is None:
+        profile = CompetitorScrapingProfile(competitor_id=competitor_id)
+        db.add(profile)
+    for field, value in data.model_dump(exclude_none=True).items():
+        setattr(profile, field, value)
+    db.commit()
     return {"status": "updated"}
 
 

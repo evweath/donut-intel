@@ -116,6 +116,8 @@ function app() {
     bulkImportSessionName: '',
     competitorScanForm: { ids: [], session_name: '', find_similar: false, max_pages: 100, criteria: {} },
     competitorScanRunning: false,
+    competitorProfile: null,
+    competitorProfileSaving: false,
     competitorScanCriteria: {
       use_model_number: true, use_manufacturer: true, use_title_fuzzy: true,
       use_title_exact: true, use_price: false, fuzzy_threshold: 70,
@@ -864,8 +866,39 @@ function app() {
     },
 
     async openCompetitor(comp) {
-      try { this.competitorDetail = await this.api(`/api/competitors/${comp.id}`); }
-      catch (e) { this.toast('Failed to load competitor: ' + e.message, 'error'); }
+      try {
+        this.competitorDetail = await this.api(`/api/competitors/${comp.id}`);
+        this.competitorProfile = null;
+        this.loadCompetitorProfile(comp.id);
+      } catch (e) { this.toast('Failed to load competitor: ' + e.message, 'error'); }
+    },
+
+    async loadCompetitorProfile(id) {
+      try {
+        this.competitorProfile = await this.api(`/api/competitors/${id}/profile`);
+      } catch (e) { this.competitorProfile = null; }
+    },
+
+    async saveCompetitorProfile() {
+      if (!this.competitorDetail || !this.competitorProfile) return;
+      this.competitorProfileSaving = true;
+      try {
+        await this.api(`/api/competitors/${this.competitorDetail.id}/profile`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            preferred_scraper: this.competitorProfile.preferred_scraper,
+            min_crawl_interval_hours: this.competitorProfile.min_crawl_interval_hours,
+            request_delay_ms: this.competitorProfile.request_delay_ms,
+            max_pages_per_scan: this.competitorProfile.max_pages_per_scan,
+            notes: this.competitorProfile.notes,
+          }),
+        });
+        this.toast('Scraping profile saved', 'success');
+      } catch (e) {
+        this.toast('Failed to save profile: ' + e.message, 'error');
+      } finally {
+        this.competitorProfileSaving = false;
+      }
     },
 
     async deleteCompetitor(id) {

@@ -256,6 +256,47 @@ class Competitor(Base):
 
     scans = relationship("CompetitorScan", back_populates="competitor")
     matches = relationship("CompetitorProductMatch", back_populates="competitor")
+    scraping_profile = relationship(
+        "CompetitorScrapingProfile", back_populates="competitor", uselist=False
+    )
+
+
+# ---------------------------------------------------------------------------
+# Competitor Scraping Profile — learned + manual scraping rules (F_PROFILE)
+# ---------------------------------------------------------------------------
+class CompetitorScrapingProfile(Base):
+    __tablename__ = "competitor_scraping_profiles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    competitor_id = Column(Integer, ForeignKey("competitors.id"), nullable=False, unique=True)
+
+    # Auto-detected platform / method
+    platform = Column(String(50), default="unknown")        # shopify|playwright|unknown
+    preferred_scraper = Column(String(50), default="auto")  # shopify_api|playwright|auto
+
+    # Rate-limit / crawl rules (editable + auto-learned)
+    min_crawl_interval_hours = Column(Float, default=24.0)
+    request_delay_ms = Column(Integer)      # None = use global config
+    max_pages_per_scan = Column(Integer)    # None = unlimited
+
+    # 429 / rate-limit tracking (auto-learned)
+    last_429_at = Column(DateTime)
+    rate_limit_count = Column(Integer, default=0)
+
+    # Error tracking (auto-learned)
+    last_error_at = Column(DateTime)
+    last_error_message = Column(String(500))
+    consecutive_failures = Column(Integer, default=0)
+
+    # Success tracking (auto-learned)
+    last_success_at = Column(DateTime)
+    best_product_count = Column(Integer, default=0)
+
+    # Manual notes
+    notes = Column(Text)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+    competitor = relationship("Competitor", back_populates="scraping_profile")
 
 
 # ---------------------------------------------------------------------------

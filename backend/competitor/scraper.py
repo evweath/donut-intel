@@ -20,6 +20,7 @@ from backend.database.models import (
     Competitor,
     CompetitorProductMatch,
     CompetitorScan,
+    CompetitorScrapingProfile,
     PriceHistory,
     Product,
 )
@@ -38,18 +39,29 @@ async def _is_shopify_store(base_url: str) -> bool:
         return False
 
 
-async def scrape_shopify_store(base_url: str, domain: str) -> List[ScrapedProduct]:
-    """Paginate through Shopify's /products.json and return ScrapedProduct list."""
+async def scrape_shopify_store(
+    base_url: str, domain: str, request_delay_ms: int = 0
+) -> tuple[List[ScrapedProduct], bool]:
+    """Paginate through Shopify's /products.json. Returns (products, rate_limited)."""
     products: List[ScrapedProduct] = []
+    rate_limited = False
     page = 1
     base = base_url.rstrip("/")
+    delay = request_delay_ms / 1000.0
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
         while True:
             url = f"{base}/products.json?limit=250&page={page}"
             try:
                 r = await client.get(url)
+                if r.status_code == 429:
+                    logger.warning("Shopify %s: rate limited (429) on page %d", domain, page)
+                    rate_limited = True
+                    break
                 r.raise_for_status()
                 batch = r.json().get("products", [])
+            except httpx.HTTPStatusError as exc:
+                logger.warning("Shopify products.json page %d failed: %s", page, exc)
+                break
             except Exception as exc:
                 logger.warning("Shopify products.json page %d failed: %s", page, exc)
                 break
@@ -76,7 +88,9 @@ async def scrape_shopify_store(base_url: str, domain: str) -> List[ScrapedProduc
             if len(batch) < 250:
                 break
             page += 1
-    return products
+            if delay > 0:
+                await asyncio.sleep(delay)
+    return products, rate_limited
 
 
 async def run_competitor_scan(
@@ -107,6 +121,35 @@ async def run_competitor_scan(
         if not competitor:
             raise ValueError(f"Competitor {competitor_id} not found")
 
+        # Load or create scraping profile
+        profile = competitor.scraping_profile
+        if profile is None:
+            profile = CompetitorScrapingProfile(competitor_id=competitor_id)
+            db.add(profile)
+            db.flush()
+
+        # Enforce minimum crawl interval
+        if profile.min_crawl_interval_hours and profile.last_success_at:
+            from datetime import timedelta
+            next_allowed = profile.last_success_at + timedelta(hours=profile.min_crawl_interval_hours)
+            if datetime.utcnow() < next_allowed:
+                logger.info(
+                    "Skipping %s — too soon (next allowed: %s)",
+                    competitor.domain, next_allowed.isoformat()
+                )
+                return {
+                    "scan_id": None,
+                    "competitor": competitor.domain,
+                    "products_scraped": 0,
+                    "matches_found": 0,
+                    "skipped": True,
+                    "next_allowed_at": next_allowed.isoformat(),
+                }
+
+        # Apply profile overrides
+        effective_max_pages = profile.max_pages_per_scan or max_pages
+        effective_delay_ms = profile.request_delay_ms if profile.request_delay_ms is not None else 0
+
         comp_scan = CompetitorScan(
             competitor_id=competitor_id,
             session_name=session_name,
@@ -131,16 +174,28 @@ async def run_competitor_scan(
 
         try:
             base_url = competitor.base_url or f"https://{competitor.domain}"
+            rate_limited = False
 
-            if await _is_shopify_store(base_url):
-                logger.info("Detected Shopify store: %s — using JSON API", competitor.domain)
-                scraped_products = await scrape_shopify_store(base_url, competitor.domain)
+            if profile.preferred_scraper == "shopify_api" or (
+                profile.preferred_scraper == "auto" and await _is_shopify_store(base_url)
+            ):
+                logger.info("Using Shopify JSON API for %s", competitor.domain)
+                profile.platform = "shopify"
+                profile.preferred_scraper = "shopify_api"
+                scraped_products, rate_limited = await scrape_shopify_store(
+                    base_url, competitor.domain, request_delay_ms=effective_delay_ms
+                )
             else:
+                profile.platform = "playwright"
+                if profile.preferred_scraper == "auto":
+                    profile.preferred_scraper = "playwright"
                 scraper = BaseScraper()
+                if effective_delay_ms:
+                    scraper.delay = effective_delay_ms / 1000.0
                 async with scraper:
                     product_urls = await scraper.discover_product_urls(
                         base_url=base_url,
-                        max_pages=max_pages,
+                        max_pages=effective_max_pages,
                     )
                     await emit("competitor_urls_discovered", {
                         "competitor": competitor.domain,
@@ -244,6 +299,16 @@ async def run_competitor_scan(
             competitor.total_matching_products = total_matches
             competitor.scan_session_name = session_name
 
+            # Update scraping profile with learned data
+            now = datetime.utcnow()
+            if rate_limited:
+                profile.last_429_at = now
+                profile.rate_limit_count = (profile.rate_limit_count or 0) + 1
+            profile.last_success_at = now
+            profile.consecutive_failures = 0
+            if len(scraped_products) > (profile.best_product_count or 0):
+                profile.best_product_count = len(scraped_products)
+
             await emit("competitor_scan_complete", {
                 "competitor": competitor.domain,
                 "scan_id": scan_id,
@@ -263,6 +328,10 @@ async def run_competitor_scan(
             comp_scan.status = "failed"
             comp_scan.completed_at = datetime.utcnow()
             comp_scan.errors = 1
+            # Update profile failure tracking
+            profile.last_error_at = datetime.utcnow()
+            profile.last_error_message = str(exc)[:500]
+            profile.consecutive_failures = (profile.consecutive_failures or 0) + 1
             await emit("competitor_scan_error", {
                 "competitor": competitor.domain,
                 "error": str(exc),
