@@ -233,6 +233,7 @@ def _get_source_domains() -> set:
 async def run_web_search_scan(
     session_name: str,
     max_results: int = 20,
+    product_limit: Optional[int] = None,
     product_ids: Optional[List[int]] = None,
     callbacks: Optional[List[Callable]] = None,
     force: bool = False,
@@ -266,6 +267,10 @@ async def run_web_search_scan(
         q = db.query(Product).filter(Product.is_active == True)
         if product_ids:
             q = q.filter(Product.id.in_(product_ids))
+        # Order by price descending so the most valuable products are searched first
+        q = q.order_by(Product.price_canonical.desc().nullslast())
+        if product_limit:
+            q = q.limit(product_limit)
         products = q.all()
         # detach — we'll open new sessions per batch
         product_snapshots = [

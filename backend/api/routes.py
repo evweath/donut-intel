@@ -756,6 +756,7 @@ async def start_competitor_scan(req: StartCompetitorScanRequest, db: Session = D
 class WebSearchScanRequest(BaseModel):
     session_name: Optional[str] = None
     max_results: int = 20           # URLs to visit per product (1–100)
+    product_limit: Optional[int] = None   # cap on number of products to scan; None = all
     product_ids: Optional[List[int]] = None   # None = all active products
     force: bool = False             # ignore 3-day cooldown
 
@@ -765,6 +766,7 @@ async def start_web_search_scan(req: WebSearchScanRequest):
     """Primary scan method: search 4 engines per product, visit result pages, store matches."""
     session_name = req.session_name or f"Web Search {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
     max_results = max(1, min(100, req.max_results))
+    product_limit = max(1, req.product_limit) if req.product_limit else None
 
     async def _run():
         from backend.competitor.web_search_scan import run_web_search_scan
@@ -772,6 +774,7 @@ async def start_web_search_scan(req: WebSearchScanRequest):
             result = await run_web_search_scan(
                 session_name=session_name,
                 max_results=max_results,
+                product_limit=product_limit,
                 product_ids=req.product_ids,
                 force=req.force,
                 callbacks=[lambda e, d: manager.broadcast({"event": e, **d})],

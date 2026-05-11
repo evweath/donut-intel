@@ -118,6 +118,7 @@ function app() {
     competitorScanRunning: false,
     webSearchRunning: false,
     webSearchMaxResults: 20,
+    webSearchProductLimit: 100,
     competitorProfile: null,
     competitorProfileSaving: false,
     productSort: { col: '', dir: 'asc' },
@@ -876,14 +877,16 @@ function app() {
     async startWebSearchScan() {
       if (this.webSearchRunning) return;
       const n = Math.max(1, Math.min(100, parseInt(this.webSearchMaxResults) || 20));
+      const limit = parseInt(this.webSearchProductLimit) || null;
       this.webSearchMaxResults = n;
       this.webSearchRunning = true;
       try {
         await this.api('/api/competitors/web-search-scan', {
           method: 'POST',
-          body: JSON.stringify({ max_results: n }),
+          body: JSON.stringify({ max_results: n, product_limit: limit || null }),
         });
-        this.toast(`Web search scan started (top ${n} results per product)`, 'info');
+        const productDesc = limit ? `${limit} products` : 'all products';
+        this.toast(`Web search scan started — ${productDesc}, top ${n} results each`, 'info');
       } catch (e) {
         this.webSearchRunning = false;
         this.toast('Failed to start web search scan: ' + e.message, 'error');
