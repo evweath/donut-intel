@@ -39,7 +39,12 @@ class DeduplicationEngine:
             "deduplication", "price_tolerance_percent", default=2.0
         )
 
-    def run(self, session: Session, product_ids: Optional[List[int]] = None) -> dict:
+    def run(
+        self,
+        session: Session,
+        product_ids: Optional[List[int]] = None,
+        domain_filters: Optional[List[str]] = None,
+    ) -> dict:
         """
         Run deduplication across all products (or a subset).
         Only compares products from DIFFERENT source sites.
@@ -57,6 +62,12 @@ class DeduplicationEngine:
         query = session.query(Product).filter(Product.is_active == True)
         if product_ids:
             query = query.filter(Product.id.in_(product_ids))
+        if domain_filters:
+            query = query.filter(
+                Product.sources.any(
+                    ProductSource.source_site.in_(domain_filters) & (ProductSource.is_active == True)
+                )
+            )
         products = query.all()
 
         logger.info(f"Comparing {len(products)} products for duplicates")

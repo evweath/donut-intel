@@ -26,6 +26,7 @@ function app() {
       { id: 'pricing',      icon: '💰', label: 'Price Comparison',  badge: 0 },
       { id: 'scans',        icon: '🔍', label: 'Scans',             badge: 0 },
       { id: 'duplicates',   icon: '🔁', label: 'Duplicates',        badge: 0 },
+      { id: 'source-products', icon: '📂', label: 'Source Products',   badge: 0 },
       { id: 'sync',         icon: '🔄', label: 'Source Sync',        badge: 0 },
       { id: 'scheduler',    icon: '⏰', label: 'Scheduler',         badge: 0 },
       { id: 'reports',      icon: '📋', label: 'Reports',           badge: 0 },
@@ -55,6 +56,14 @@ function app() {
     // Duplicates
     duplicates: { candidates: [] },
     dupFilter: 'pending',
+    dupSelected: {},
+    dupDomainFilters: {},
+
+    // Source Domain Product Browser
+    sourceProducts: { products: [], total: 0, page: 1, pages: 1 },
+    sourceProductDomain: '',
+    sourceProductSearch: '',
+    sourceProductSelected: {},
 
     // Source Sync / Domain Comparison
     domainComparison: { products: [], total: 0, all_domains: [], page: 1, pages: 1 },
@@ -269,6 +278,14 @@ function app() {
     loadSourceSites() {
       if (this.settingsData?.source_sites) {
         this.sourceSites = this.settingsData.source_sites.filter(s => s.enabled);
+        if (!Object.keys(this.dupDomainFilters).length) {
+          const filters = {};
+          this.sourceSites.forEach(s => { filters[s.domain] = true; });
+          this.dupDomainFilters = filters;
+        }
+        if (!this.sourceProductDomain && this.sourceSites.length) {
+          this.sourceProductDomain = this.sourceSites[0].domain;
+        }
       }
     },
 
@@ -312,7 +329,11 @@ function app() {
     // -----------------------------------------------------------------------
     async runDedup() {
       try {
-        await this.api('/api/dedup/run', { method: 'POST', body: JSON.stringify({}) });
+        const selected = Object.entries(this.dupDomainFilters).filter(([, v]) => v).map(([k]) => k);
+        const body = selected.length && selected.length < this.sourceSites.length
+          ? { domain_filters: selected }
+          : {};
+        await this.api('/api/dedup/run', { method: 'POST', body: JSON.stringify(body) });
         this.toast('Deduplication started in background...', 'info');
       } catch (e) { this.toast('Failed to start dedup: ' + e.message, 'error'); }
     },
@@ -321,6 +342,7 @@ function app() {
       try {
         const params = new URLSearchParams({ status: this.dupFilter, per_page: 50 });
         this.duplicates = await this.api(`/api/dedup/candidates?${params}`) || { candidates: [] };
+        this.dupSelected = {};
       } catch {}
     },
 
@@ -333,6 +355,104 @@ function app() {
         await this.loadDuplicates();
         await this.loadStats();
       } catch (e) { this.toast('Failed to resolve: ' + e.message, 'error'); }
+    },
+
+    dupSelectedCount() {
+      return Object.values(this.dupSelected).filter(Boolean).length;
+    },
+
+    dupAllSelected() {
+      const candidates = this.duplicates.candidates || [];
+      return candidates.length > 0 && candidates.every(d => this.dupSelected[d.id]);
+    },
+
+    dupToggleSelectAll() {
+      const candidates = this.duplicates.candidates || [];
+      const selectAll = !this.dupAllSelected();
+      const updated = {};
+      candidates.forEach(d => { updated[d.id] = selectAll; });
+      this.dupSelected = updated;
+    },
+
+    async deleteSelectedDups() {
+      const ids = Object.entries(this.dupSelected).filter(([, v]) => v).map(([k]) => parseInt(k));
+      if (!ids.length) return;
+      try {
+        const res = await this.api('/api/dedup/candidates/bulk-delete', {
+          method: 'POST', body: JSON.stringify({ candidate_ids: ids }),
+        });
+        this.toast(`Deleted ${res.deleted} duplicate${res.deleted !== 1 ? 's' : ''}`, 'success');
+        await this.loadDuplicates();
+        await this.loadStats();
+      } catch (e) { this.toast('Failed to delete: ' + e.message, 'error'); }
+    },
+
+    async dupSelectAllPages() {
+      try {
+        const res = await this.api(`/api/dedup/candidates/ids?status=${this.dupFilter}`);
+        const all = {};
+        (res.ids || []).forEach(id => { all[id] = true; });
+        this.dupSelected = all;
+        this.toast(`Selected ${res.ids.length} duplicate${res.ids.length !== 1 ? 's' : ''} across all pages`, 'info');
+      } catch (e) { this.toast('Failed to select all: ' + e.message, 'error'); }
+    },
+
+    // -----------------------------------------------------------------------
+    // Source Domain Product Browser
+    // -----------------------------------------------------------------------
+    async loadSourceProducts(domain, page = 1) {
+      if (domain) this.sourceProductDomain = domain;
+      if (!this.sourceProductDomain && this.sourceSites.length) {
+        this.sourceProductDomain = this.sourceSites[0].domain;
+      }
+      try {
+        const params = new URLSearchParams({ source_site: this.sourceProductDomain, page, per_page: 50 });
+        if (this.sourceProductSearch) params.set('search', this.sourceProductSearch);
+        this.sourceProducts = await this.api(`/api/products?${params}`) || { products: [], total: 0, page: 1, pages: 1 };
+        this.sourceProductSelected = {};
+      } catch (e) { this.toast('Failed to load products: ' + e.message, 'error'); }
+    },
+
+    sourceProductSelectedCount() {
+      return Object.values(this.sourceProductSelected).filter(Boolean).length;
+    },
+
+    sourceProductAllSelected() {
+      const prods = this.sourceProducts.products || [];
+      return prods.length > 0 && prods.every(p => this.sourceProductSelected[p.id]);
+    },
+
+    sourceProductToggleSelectAll() {
+      const prods = this.sourceProducts.products || [];
+      const selectAll = !this.sourceProductAllSelected();
+      const updated = {};
+      prods.forEach(p => { updated[p.id] = selectAll; });
+      this.sourceProductSelected = updated;
+    },
+
+    async sourceProductSelectAllPages() {
+      try {
+        const params = new URLSearchParams({ source_site: this.sourceProductDomain });
+        if (this.sourceProductSearch) params.set('search', this.sourceProductSearch);
+        const res = await this.api(`/api/products/ids?${params}`);
+        const all = {};
+        (res.ids || []).forEach(id => { all[id] = true; });
+        this.sourceProductSelected = all;
+        this.toast(`Selected ${res.ids.length} product${res.ids.length !== 1 ? 's' : ''} across all pages`, 'info');
+      } catch (e) { this.toast('Failed to select all: ' + e.message, 'error'); }
+    },
+
+    async deactivateSelectedProducts() {
+      const ids = Object.entries(this.sourceProductSelected).filter(([, v]) => v).map(([k]) => parseInt(k));
+      if (!ids.length) return;
+      try {
+        const res = await this.api('/api/products/bulk-deactivate', {
+          method: 'POST', body: JSON.stringify({ product_ids: ids }),
+        });
+        this.toast(`Deactivated ${res.deactivated} product${res.deactivated !== 1 ? 's' : ''}`, 'success');
+        await this.loadSourceProducts(null, this.sourceProducts.page);
+        await this.loadStats();
+      } catch (e) { this.toast('Failed to deactivate: ' + e.message, 'error'); }
     },
 
     // Returns an array of comparison rows for the duplicate card.

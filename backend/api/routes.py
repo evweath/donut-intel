@@ -104,11 +104,14 @@ def get_stats(db: Session = Depends(get_db_session)):
         .filter(ScanSession.session_type == "source")
         .order_by(ScanSession.started_at.desc()).first()
     )
-    site_counts = (
+    site_counts_raw = (
         db.query(ProductSource.source_site, func.count(ProductSource.id))
         .filter(ProductSource.is_active == True)
         .group_by(ProductSource.source_site).all()
     )
+    site_counts_map = {site: count for site, count in site_counts_raw}
+    for s in config.get("source_sites", default=[]):
+        site_counts_map.setdefault(s["domain"], 0)
     categories = (
         db.query(Product.category, func.count(Product.id))
         .filter(Product.is_active == True, Product.category != None)
@@ -128,7 +131,7 @@ def get_stats(db: Session = Depends(get_db_session)):
             "completed_at": last_scan.completed_at.isoformat() if last_scan and last_scan.completed_at else None,
             "new_products": last_scan.new_products,
         } if last_scan else None,
-        "products_by_site": {site: count for site, count in site_counts},
+        "products_by_site": site_counts_map,
         "categories": [{"category": cat or "Uncategorized", "count": cnt} for cat, cnt in categories],
         "db": db_health_check(),
     }
@@ -191,12 +194,60 @@ def get_filter_options(db: Session = Depends(get_db_session)):
         .filter(Product.is_active == True, Product.category != None)
         .distinct().order_by(Product.category).all()
     )
-    sites = db.query(ProductSource.source_site).filter(ProductSource.is_active == True).distinct().all()
+    db_sites = {s[0] for s in db.query(ProductSource.source_site).filter(ProductSource.is_active == True).distinct().all() if s[0]}
+    configured_sites = {s["domain"] for s in config.get("source_sites", default=[])}
+    all_sites = sorted(db_sites | configured_sites)
     return {
         "manufacturers": [m[0] for m in manufacturers if m[0]],
         "categories": [c[0] for c in categories if c[0]],
-        "source_sites": [s[0] for s in sites if s[0]],
+        "source_sites": all_sites,
     }
+
+
+@router.get("/api/products/ids")
+def list_product_ids(
+    source_site: Optional[str] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db_session),
+):
+    query = db.query(Product.id).filter(Product.is_active == True)
+    if source_site:
+        query = query.join(Product.sources).filter(ProductSource.source_site == source_site)
+    if search:
+        like = f"%{search}%"
+        query = query.filter(or_(
+            Product.canonical_title.ilike(like),
+            Product.manufacturer.ilike(like),
+            Product.model_number.ilike(like),
+        ))
+    return {"ids": [row[0] for row in query.all()]}
+
+
+class BulkDeactivateRequest(BaseModel):
+    product_ids: List[int]
+
+
+@router.post("/api/products/bulk-deactivate")
+def bulk_deactivate_products(req: BulkDeactivateRequest, db: Session = Depends(get_db_session)):
+    if not req.product_ids:
+        return {"deactivated": 0}
+    updated = (
+        db.query(Product)
+        .filter(Product.id.in_(req.product_ids))
+        .update({"is_active": False}, synchronize_session=False)
+    )
+    db.commit()
+    return {"deactivated": updated}
+
+
+@router.post("/api/products/{product_id}/deactivate")
+def deactivate_product(product_id: int, db: Session = Depends(get_db_session)):
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    product.is_active = False
+    db.commit()
+    return {"status": "deactivated"}
 
 
 @router.get("/api/products/{product_id}")
@@ -424,6 +475,7 @@ def get_scan_status(session_id: int, db: Session = Depends(get_db_session)):
 
 class DeduplicateRequest(BaseModel):
     product_ids: Optional[List[int]] = None
+    domain_filters: Optional[List[str]] = None
 
 
 @router.post("/api/dedup/run")
@@ -431,7 +483,7 @@ async def run_deduplication(req: DeduplicateRequest):
     async def do_dedup():
         with session_scope() as s:
             engine = DeduplicationEngine()
-            stats = engine.run(s, req.product_ids)
+            stats = engine.run(s, req.product_ids, req.domain_filters)
             await manager.broadcast({"event": "dedup_complete", "stats": stats})
     asyncio.create_task(do_dedup())
     return {"status": "dedup_started"}
@@ -468,6 +520,14 @@ def list_duplicate_candidates(status: str = "pending", page: int = 1, per_page: 
     return {"total": total, "candidates": results}
 
 
+@router.get("/api/dedup/candidates/ids")
+def list_duplicate_candidate_ids(status: str = "pending", db: Session = Depends(get_db_session)):
+    query = db.query(DuplicateCandidate.id)
+    if status != "all":
+        query = query.filter(DuplicateCandidate.status == status)
+    return {"ids": [row[0] for row in query.all()]}
+
+
 class ResolveRequest(BaseModel):
     action: str
     notes: Optional[str] = None
@@ -485,6 +545,23 @@ def resolve_duplicate(candidate_id: int, req: ResolveRequest, db: Session = Depe
     if not ok:
         raise HTTPException(status_code=404, detail="Candidate not found")
     return {"status": "resolved", "action": req.action}
+
+
+class BulkDeleteRequest(BaseModel):
+    candidate_ids: List[int]
+
+
+@router.post("/api/dedup/candidates/bulk-delete")
+def bulk_delete_duplicate_candidates(req: BulkDeleteRequest, db: Session = Depends(get_db_session)):
+    if not req.candidate_ids:
+        return {"deleted": 0}
+    deleted = (
+        db.query(DuplicateCandidate)
+        .filter(DuplicateCandidate.id.in_(req.candidate_ids))
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"deleted": deleted}
 
 
 # ---------------------------------------------------------------------------

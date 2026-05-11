@@ -42,7 +42,7 @@
     <nav class="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
       <template x-for="item in navItems" :key="item.id">
         <button
-          @click="currentView = item.id; item.id === 'products' && loadProducts(1); item.id === 'competitors' && loadCompetitors(1); item.id === 'pricing' && loadPriceMatrix(1); item.id === 'scheduler' && loadJobs(); item.id === 'export' && loadExportHistory(); item.id === 'sync' && loadDomainComparison()"
+          @click="currentView = item.id; item.id === 'products' && loadProducts(1); item.id === 'competitors' && loadCompetitors(1); item.id === 'pricing' && loadPriceMatrix(1); item.id === 'scheduler' && loadJobs(); item.id === 'export' && loadExportHistory(); item.id === 'sync' && loadDomainComparison(); item.id === 'source-products' && loadSourceProducts()"
           :class="currentView === item.id
             ? 'bg-orange-600 text-white'
             : 'text-gray-300 hover:bg-gray-700 hover:text-white'"
@@ -433,17 +433,53 @@
 
     <!-- ===== DUPLICATES VIEW ===== -->
     <div x-show="currentView === 'duplicates'" class="p-6">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-2xl font-bold">Duplicate Review</h2>
-        <div class="flex gap-2">
-          <select x-model="dupFilter" @change="loadDuplicates()" class="border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600">
-            <option value="pending">Pending</option>
-            <option value="merged">Merged</option>
-            <option value="rejected">Rejected</option>
-            <option value="all">All</option>
-          </select>
-          <button @click="runDedup()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm">
-            🔁 Re-run Dedup
+      <div class="mb-4 space-y-3">
+        <!-- Title row -->
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <h2 class="text-2xl font-bold">Duplicate Review</h2>
+          <div class="flex gap-2 items-center flex-wrap">
+            <select x-model="dupFilter" @change="loadDuplicates()" class="border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600">
+              <option value="pending">Pending</option>
+              <option value="merged">Merged</option>
+              <option value="rejected">Rejected</option>
+              <option value="all">All</option>
+            </select>
+            <button @click="runDedup()" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm">
+              🔁 Re-run Dedup
+            </button>
+          </div>
+        </div>
+
+        <!-- Domain filter checkboxes -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow px-4 py-3 flex flex-wrap items-center gap-4">
+          <span class="text-sm font-medium text-gray-500">Scan domains:</span>
+          <template x-for="site in sourceSites" :key="site.domain">
+            <label class="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+              <input type="checkbox"
+                :checked="dupDomainFilters[site.domain]"
+                @change="dupDomainFilters = { ...dupDomainFilters, [site.domain]: $event.target.checked }"
+                class="w-4 h-4" />
+              <span x-text="site.name || site.domain"></span>
+            </label>
+          </template>
+        </div>
+
+        <!-- Selection toolbar -->
+        <div class="flex items-center gap-3 flex-wrap">
+          <label class="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+            <input type="checkbox" :checked="dupAllSelected()" @change="dupToggleSelectAll()" class="w-4 h-4" />
+            Select All on Page
+          </label>
+          <button @click="dupSelectAllPages()"
+            class="text-xs bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 px-3 py-1.5 rounded font-medium">
+            Select All on All Pages
+          </button>
+          <span x-show="dupSelectedCount() > 0" class="text-xs bg-blue-500 text-white px-2 py-1 rounded-full font-bold"
+            x-text="dupSelectedCount() + ' selected'"></span>
+          <button x-show="dupSelectedCount() > 0"
+            @click="deleteSelectedDups()"
+            class="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium">
+            🗑 Delete Selected
           </button>
         </div>
       </div>
@@ -455,10 +491,14 @@
 
       <div class="space-y-3">
         <template x-for="dup in duplicates.candidates" :key="dup.id">
-          <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4"
+            :class="dupSelected[dup.id] ? 'ring-2 ring-blue-400' : ''">
 
             <!-- Header: score + match badges + summary + actions -->
             <div class="flex items-start justify-between mb-3 gap-3">
+              <input type="checkbox" :checked="dupSelected[dup.id]"
+                @change="dupSelected = { ...dupSelected, [dup.id]: $event.target.checked }"
+                class="w-4 h-4 mt-1 flex-shrink-0 cursor-pointer" />
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-3 mb-2">
                   <div class="text-2xl font-bold flex-shrink-0"
@@ -527,6 +567,112 @@
 
           </div>
         </template>
+      </div>
+    </div>
+
+    <!-- ===== SOURCE PRODUCTS VIEW ===== -->
+    <div x-show="currentView === 'source-products'" class="p-6">
+      <div class="mb-4 space-y-3">
+        <!-- Title + search row -->
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <h2 class="text-2xl font-bold">Source Domain Products</h2>
+          <div class="flex gap-2 items-center">
+            <input x-model="sourceProductSearch" @input.debounce.300ms="loadSourceProducts(null, 1)"
+              type="text" placeholder="Search products..."
+              class="border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 w-56" />
+            <button @click="loadSourceProducts(null, 1)"
+              class="bg-orange-500 hover:bg-orange-600 text-white px-3 py-2 rounded-lg text-sm">🔄</button>
+          </div>
+        </div>
+
+        <!-- Domain tabs -->
+        <div class="flex gap-2 flex-wrap">
+          <template x-for="site in sourceSites" :key="site.domain">
+            <button
+              @click="loadSourceProducts(site.domain, 1)"
+              :class="sourceProductDomain === site.domain
+                ? 'bg-orange-500 text-white'
+                : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'"
+              class="px-4 py-2 rounded-lg text-sm font-medium shadow border border-gray-200 dark:border-gray-700 transition-colors"
+              x-text="site.name || site.domain">
+            </button>
+          </template>
+        </div>
+
+        <!-- Selection toolbar -->
+        <div class="flex items-center gap-3 flex-wrap">
+          <label class="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+            <input type="checkbox" :checked="sourceProductAllSelected()" @change="sourceProductToggleSelectAll()" class="w-4 h-4" />
+            Select All on Page
+          </label>
+          <button @click="sourceProductSelectAllPages()"
+            class="text-xs bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 px-3 py-1.5 rounded font-medium">
+            Select All on All Pages
+          </button>
+          <span x-show="sourceProductSelectedCount() > 0" class="text-xs bg-blue-500 text-white px-2 py-1 rounded-full font-bold"
+            x-text="sourceProductSelectedCount() + ' selected'"></span>
+          <button x-show="sourceProductSelectedCount() > 0"
+            @click="deactivateSelectedProducts()"
+            class="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium">
+            🚫 Deactivate Selected
+          </button>
+          <span class="text-xs text-gray-400 ml-auto" x-text="sourceProducts.total + ' products total'"></span>
+        </div>
+      </div>
+
+      <!-- Product table -->
+      <div x-show="sourceProducts.products.length === 0" class="bg-white dark:bg-gray-800 rounded-xl shadow p-12 text-center text-gray-400">
+        <div class="text-4xl mb-2">📦</div>
+        <div>No products found for this domain.</div>
+      </div>
+
+      <div x-show="sourceProducts.products.length > 0" class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
+            <tr>
+              <th class="w-8 px-3 py-3"></th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-600 dark:text-gray-300">Product</th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-600 dark:text-gray-300">Manufacturer</th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-600 dark:text-gray-300">Model #</th>
+              <th class="px-4 py-3 text-right font-semibold text-gray-600 dark:text-gray-300">Price</th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-600 dark:text-gray-300">Category</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+            <template x-for="p in sourceProducts.products" :key="p.id">
+              <tr :class="sourceProductSelected[p.id] ? 'bg-blue-50 dark:bg-blue-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'"
+                class="cursor-pointer" @click="sourceProductSelected = { ...sourceProductSelected, [p.id]: !sourceProductSelected[p.id] }">
+                <td class="px-3 py-3">
+                  <input type="checkbox" :checked="sourceProductSelected[p.id]"
+                    @click.stop
+                    @change="sourceProductSelected = { ...sourceProductSelected, [p.id]: $event.target.checked }"
+                    class="w-4 h-4 cursor-pointer" />
+                </td>
+                <td class="px-4 py-3">
+                  <div class="font-medium line-clamp-2" x-text="p.canonical_title || p.title"></div>
+                  <div class="text-xs text-gray-400 font-mono" x-text="'ID: ' + p.id"></div>
+                </td>
+                <td class="px-4 py-3 text-gray-600 dark:text-gray-300" x-text="p.manufacturer || '—'"></td>
+                <td class="px-4 py-3 font-mono text-xs text-gray-600 dark:text-gray-300" x-text="p.model_number || '—'"></td>
+                <td class="px-4 py-3 text-right font-semibold"
+                  x-text="p.price_canonical ? '$' + Number(p.price_canonical).toFixed(2) : '—'"></td>
+                <td class="px-4 py-3 text-xs text-gray-500" x-text="p.category || '—'"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pagination -->
+      <div x-show="sourceProducts.pages > 1" class="flex items-center justify-center gap-2 mt-4">
+        <button @click="loadSourceProducts(null, sourceProducts.page - 1)"
+          :disabled="sourceProducts.page <= 1"
+          class="px-3 py-1.5 rounded border text-sm disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-700">← Prev</button>
+        <span class="text-sm text-gray-500"
+          x-text="'Page ' + sourceProducts.page + ' of ' + sourceProducts.pages"></span>
+        <button @click="loadSourceProducts(null, sourceProducts.page + 1)"
+          :disabled="sourceProducts.page >= sourceProducts.pages"
+          class="px-3 py-1.5 rounded border text-sm disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-700">Next →</button>
       </div>
     </div>
 
