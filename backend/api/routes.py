@@ -570,7 +570,10 @@ def list_competitors(
 ):
     """F14: List all tracked competitors with scan history."""
     source_domains = {s["domain"] for s in config.get("source_sites", default=[])}
-    query = db.query(Competitor).filter(~Competitor.domain.in_(source_domains))
+    query = db.query(Competitor).filter(
+        Competitor.is_active == True,
+        ~Competitor.domain.in_(source_domains),
+    )
     total = query.count()
     competitors = (
         query.order_by(Competitor.domain)
@@ -665,6 +668,7 @@ def delete_competitor(competitor_id: int, db: Session = Depends(get_db_session))
     if not comp:
         raise HTTPException(status_code=404, detail="Competitor not found")
     comp.is_active = False
+    db.commit()
     return {"status": "deactivated"}
 
 
