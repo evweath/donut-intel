@@ -39,9 +39,9 @@ async def _run_sync(fn):
 
 async def _text_search(query: str, max_results: int) -> List[Dict[str, Any]]:
     def _search():
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         with DDGS() as ddgs:
-            return list(ddgs.text(query, max_results=max_results))
+            return list(ddgs.text(query, max_results=max_results, backend='duckduckgo'))
     try:
         return await _run_sync(_search)
     except Exception as exc:
@@ -51,13 +51,13 @@ async def _text_search(query: str, max_results: int) -> List[Dict[str, Any]]:
 
 async def _image_search(query: str, max_results: int) -> List[Dict[str, Any]]:
     def _search():
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         with DDGS() as ddgs:
-            return list(ddgs.images(query, max_results=max_results))
+            return list(ddgs.images(query, max_results=max_results, backend='duckduckgo'))
     try:
         return await _run_sync(_search)
     except Exception as exc:
-        logger.error(f"DDG image search failed: {exc}")
+        logger.warning(f"DDG image search failed (images will be missing): {exc}")
         return []
 
 

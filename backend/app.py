@@ -59,7 +59,7 @@ def setup_logging():
         fh.setFormatter(formatter)
         root.addHandler(fh)
 
-    for noisy in ["playwright", "urllib3", "httpx", "asyncio", "apscheduler"]:
+    for noisy in ["playwright", "urllib3", "httpx", "asyncio", "apscheduler", "ddgs"]:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
