@@ -492,6 +492,11 @@ function app() {
     async loadLogTail() {
       try {
         const r = await this.api('/api/logs/tail?lines=7');
+        if (r === null) {
+          // 401 — session expired, stop polling
+          if (this._logPollTimer) { clearInterval(this._logPollTimer); this._logPollTimer = null; }
+          return;
+        }
         this.logTail = r.lines || [];
       } catch {}
     },
