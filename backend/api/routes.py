@@ -6,7 +6,9 @@ Covers: scraping, dedup, products, competitors, price comparison,
 import asyncio
 import json
 import logging
+from collections import deque
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, WebSocket, WebSocketDisconnect
@@ -1260,3 +1262,102 @@ def get_domain_comparison(
         "pages": max(1, (total + per_page - 1) // per_page),
         "all_domains": all_domains,
     }
+
+
+# ---------------------------------------------------------------------------
+# Log tail (dashboard live log viewer)
+# ---------------------------------------------------------------------------
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+@router.get("/api/logs/tail")
+def tail_log(lines: int = 7):
+    log_path = _PROJECT_ROOT / "logs" / "donut_intel.log"
+    if not log_path.exists():
+        return {"lines": []}
+    with open(log_path, "r", errors="replace") as f:
+        tail = list(deque(f, maxlen=lines))
+    return {"lines": [ln.rstrip("\n") for ln in tail]}
+
+
+# ---------------------------------------------------------------------------
+# Web Search — Find This Product, Beat This Price, Find Me Customers
+# ---------------------------------------------------------------------------
+
+class FindProductRequest(BaseModel):
+    product_ids: Optional[List[int]] = None
+    query: Optional[str] = None
+    max_results: int = 5
+
+
+@router.post("/api/search/find-product")
+async def search_find_product(req: FindProductRequest, db: Session = Depends(get_db_session)):
+    from backend.search.engine import find_products
+
+    # Build text query from selected products + free-text query
+    parts: List[str] = []
+    if req.product_ids:
+        prods = db.query(Product).filter(Product.id.in_(req.product_ids), Product.is_active == True).all()
+        for p in prods:
+            if p.model_number:
+                parts.append(p.model_number)
+            if p.manufacturer:
+                parts.append(p.manufacturer)
+            if p.canonical_title:
+                parts.append(p.canonical_title)
+    if req.query:
+        parts.append(req.query)
+    if not parts:
+        raise HTTPException(status_code=400, detail="Provide product_ids or a query")
+
+    query = ' '.join(parts[:3])  # keep it focused
+
+    # Exclude domains we already track
+    known = {c.domain for c in db.query(Competitor).filter(Competitor.is_active == True).all()}
+    known |= {s["domain"] for s in config.get("source_sites", default=[])}
+
+    results = await find_products(query, exclude_domains=known, max_results=req.max_results)
+    return {"query": query, "results": results}
+
+
+class BeatPriceRequest(BaseModel):
+    description: str
+    price_min: Optional[float] = None
+    price_max: Optional[float] = None
+    characteristics: Optional[Dict[str, Any]] = None
+    max_results: int = 10
+
+
+@router.post("/api/search/beat-price")
+async def search_beat_price(req: BeatPriceRequest):
+    from backend.search.engine import find_suppliers
+    results = await find_suppliers(
+        description=req.description,
+        price_min=req.price_min,
+        price_max=req.price_max,
+        characteristics=req.characteristics,
+        max_results=req.max_results,
+    )
+    return {"results": results}
+
+
+class FindCustomersRequest(BaseModel):
+    business_type: Optional[str] = None
+    location: Optional[str] = None
+    radius_miles: Optional[int] = None
+    keywords: Optional[List[str]] = None
+    max_results: int = 20
+
+
+@router.post("/api/search/find-customers")
+async def search_find_customers(req: FindCustomersRequest):
+    from backend.search.engine import find_customers
+    results = await find_customers(
+        business_type=req.business_type,
+        location=req.location,
+        radius_miles=req.radius_miles,
+        keywords=req.keywords,
+        max_results=req.max_results,
+    )
+    return {"results": results}

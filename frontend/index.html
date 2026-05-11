@@ -42,7 +42,7 @@
     <nav class="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
       <template x-for="item in navItems" :key="item.id">
         <button
-          @click="currentView = item.id; item.id === 'products' && loadProducts(1); item.id === 'competitors' && loadCompetitors(1); item.id === 'pricing' && loadPriceMatrix(1); item.id === 'scheduler' && loadJobs(); item.id === 'export' && loadExportHistory(); item.id === 'sync' && loadDomainComparison(); item.id === 'source-products' && loadSourceProducts()"
+          @click="currentView = item.id; item.id === 'products' && loadProducts(1); item.id === 'competitors' && loadCompetitors(1); item.id === 'pricing' && loadPriceMatrix(1); item.id === 'scheduler' && loadJobs(); item.id === 'export' && loadExportHistory(); item.id === 'sync' && loadDomainComparison(); item.id === 'source-products' && loadSourceProducts(); item.id === 'find-product' && findProductSearchCatalog(); item.id === 'find-customers' && null"
           :class="currentView === item.id
             ? 'bg-orange-600 text-white'
             : 'text-gray-300 hover:bg-gray-700 hover:text-white'"
@@ -122,19 +122,47 @@
           </button>
         </div>
 
-        <!-- Scan Progress -->
-        <div x-show="scanRunning" class="mt-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg p-3">
-          <div class="flex items-center gap-2 mb-2">
-            <div class="animate-spin text-orange-500">⏳</div>
-            <span class="font-medium text-sm" x-text="scanStatus.message || 'Scanning...'"></span>
-          </div>
-          <div x-show="scanStatus.current && scanStatus.total" class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-            <div class="bg-orange-500 h-2 rounded-full transition-all"
-              :style="`width: ${Math.round(scanStatus.current / scanStatus.total * 100)}%`">
+        <!-- Scan Status Panel -->
+        <div x-show="cycleStatus.status !== 'idle' || scanRunning"
+          class="mt-4 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-xl p-4 space-y-3">
+
+          <!-- Phase + next step -->
+          <div class="flex items-start gap-3">
+            <div class="text-xl mt-0.5 animate-pulse" x-text="cycleStatus.status === 'complete' ? '✅' : '⏳'"></div>
+            <div class="flex-1">
+              <div class="font-semibold text-sm text-orange-700 dark:text-orange-300" x-text="cycleStatusLabel()"></div>
+              <div class="text-xs text-gray-600 dark:text-gray-400 mt-0.5" x-text="cycleNextStep()"></div>
             </div>
           </div>
-          <div class="text-xs text-gray-500 mt-1" x-show="scanStatus.current">
-            <span x-text="scanStatus.current"></span> / <span x-text="scanStatus.total"></span> products
+
+          <!-- Domain checklist (shown when scanning) -->
+          <div x-show="cycleStatus.domains_started?.length > 0" class="flex flex-wrap gap-3 pl-9">
+            <template x-for="d in (cycleStatus.domains_started || [])" :key="d">
+              <div class="flex items-center gap-1.5 text-xs">
+                <span x-text="(cycleStatus.domains_complete || []).includes(d) ? '✅' : '⏳'"></span>
+                <span x-text="d" class="font-mono"></span>
+              </div>
+            </template>
+          </div>
+
+          <!-- Per-product progress bar -->
+          <div x-show="scanRunning && scanStatus.total > 0" class="pl-9">
+            <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
+              <div class="bg-orange-500 h-1.5 rounded-full transition-all"
+                :style="`width: ${Math.round(scanStatus.current / scanStatus.total * 100)}%`"></div>
+            </div>
+            <div class="text-xs text-gray-500 mt-1">
+              <span x-text="scanStatus.current"></span> / <span x-text="scanStatus.total"></span> products
+            </div>
+          </div>
+
+          <!-- Live log tail -->
+          <div x-show="logTail.length > 0"
+            class="bg-gray-950 rounded-lg px-3 py-2 font-mono text-xs text-green-400 space-y-0.5 overflow-hidden">
+            <div class="text-gray-500 text-xs mb-1">— live log —</div>
+            <template x-for="(line, i) in logTail" :key="i">
+              <div class="truncate leading-5" x-text="line"></div>
+            </template>
           </div>
         </div>
       </div>
@@ -673,6 +701,269 @@
         <button @click="loadSourceProducts(null, sourceProducts.page + 1)"
           :disabled="sourceProducts.page >= sourceProducts.pages"
           class="px-3 py-1.5 rounded border text-sm disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-700">Next →</button>
+      </div>
+    </div>
+
+    <!-- ===== FIND THIS PRODUCT VIEW ===== -->
+    <div x-show="currentView === 'find-product'" class="p-6">
+      <div class="mb-6">
+        <h2 class="text-2xl font-bold mb-1">Find This Product</h2>
+        <p class="text-sm text-gray-500">Search the web for matching or similar products outside your existing competitor list.</p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <!-- Left: Catalog picker -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-3">Select Products from Catalog <span class="text-xs text-gray-400">(optional, up to 5)</span></h3>
+          <input x-model="findProductCatalogSearch" @input.debounce.300ms="findProductSearchCatalog()"
+            type="text" placeholder="Search catalog..."
+            class="w-full border rounded-lg px-3 py-2 text-sm mb-3 dark:bg-gray-700 dark:border-gray-600" />
+          <div class="space-y-1 max-h-52 overflow-y-auto">
+            <template x-for="p in findProductCatalogResults" :key="p.id">
+              <label class="flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700"
+                :class="findProductIds.includes(p.id) ? 'bg-blue-50 dark:bg-blue-900/20' : ''">
+                <input type="checkbox" :checked="findProductIds.includes(p.id)"
+                  @change="findProductToggle(p.id)" class="w-4 h-4 flex-shrink-0" />
+                <div class="min-w-0">
+                  <div class="text-sm font-medium truncate" x-text="p.canonical_title || p.title"></div>
+                  <div class="text-xs text-gray-400 font-mono" x-text="p.model_number || p.manufacturer || ''"></div>
+                </div>
+              </label>
+            </template>
+            <div x-show="!findProductCatalogResults.length" class="text-sm text-gray-400 text-center py-4">Type to search products</div>
+          </div>
+          <div x-show="findProductIds.length > 0" class="mt-2 text-xs text-blue-600 font-medium"
+            x-text="findProductIds.length + ' product' + (findProductIds.length !== 1 ? 's' : '') + ' selected'"></div>
+        </div>
+
+        <!-- Right: Free-text query + options -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 space-y-4">
+          <div>
+            <label class="text-sm font-medium block mb-1">Or describe what you're looking for</label>
+            <textarea x-model="findProductQuery" rows="4" placeholder="e.g. commercial donut fryer stainless steel 24-count capacity..."
+              class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 resize-none"></textarea>
+          </div>
+          <div class="flex items-center gap-3">
+            <label class="text-sm font-medium">Results:</label>
+            <select x-model.number="findProductMaxResults" class="border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600">
+              <option value="3">3</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+            </select>
+          </div>
+          <button @click="runFindProduct()" :disabled="findProductLoading"
+            class="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-semibold py-2.5 rounded-lg text-sm transition">
+            <span x-text="findProductLoading ? '🔍 Searching...' : '🔎 Find This Product'"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Results -->
+      <div x-show="findProductResults.length > 0">
+        <h3 class="font-semibold mb-3" x-text="`${findProductResults.length} results found`"></h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <template x-for="r in findProductResults" :key="r.url">
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden flex flex-col">
+              <div class="h-40 bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
+                <img x-show="r.image" :src="r.image" class="w-full h-full object-cover"
+                  @error="$el.style.display='none'" loading="lazy" />
+                <span x-show="!r.image" class="text-4xl">📦</span>
+              </div>
+              <div class="p-4 flex-1 flex flex-col">
+                <div class="text-sm font-semibold line-clamp-2 mb-1" x-text="r.title"></div>
+                <div class="text-xs text-gray-500 line-clamp-3 flex-1 mb-2" x-text="r.description"></div>
+                <div class="flex items-center justify-between mt-auto">
+                  <span x-show="r.price" class="text-green-600 font-bold text-sm" x-text="r.price"></span>
+                  <span x-show="r.model_number" class="text-xs font-mono text-gray-400" x-text="r.model_number"></span>
+                </div>
+                <a :href="r.url" target="_blank" rel="noopener"
+                  class="mt-3 block text-center text-xs bg-blue-500 hover:bg-blue-600 text-white px-3 py-1.5 rounded-lg truncate"
+                  x-text="r.domain">
+                </a>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== BEAT THIS PRICE VIEW ===== -->
+    <div x-show="currentView === 'beat-price'" class="p-6">
+      <div class="mb-6">
+        <h2 class="text-2xl font-bold mb-1">Beat This Price</h2>
+        <p class="text-sm text-gray-500">Describe what you need and we'll find alternate suppliers offering better prices.</p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <!-- Form -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 space-y-4">
+          <div>
+            <label class="text-sm font-medium block mb-1">Product / Service Description <span class="text-red-500">*</span></label>
+            <textarea x-model="beatPriceForm.description" rows="3"
+              placeholder="e.g. Commercial donut fryer, natural gas, 24-count capacity, stainless steel..."
+              class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 resize-none"></textarea>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-sm font-medium block mb-1">Min Price ($)</label>
+              <input x-model="beatPriceForm.price_min" type="number" min="0" placeholder="0"
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="text-sm font-medium block mb-1">Max Price ($)</label>
+              <input x-model="beatPriceForm.price_max" type="number" min="0" placeholder="no limit"
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+          </div>
+          <div>
+            <label class="text-sm font-medium block mb-2">Additional Characteristics</label>
+            <div class="grid grid-cols-2 gap-2">
+              <input x-model="beatPriceChars.manufacturer" placeholder="Manufacturer"
+                class="border rounded px-2 py-1.5 text-sm dark:bg-gray-700 dark:border-gray-600" />
+              <input x-model="beatPriceChars.size" placeholder="Size / Capacity"
+                class="border rounded px-2 py-1.5 text-sm dark:bg-gray-700 dark:border-gray-600" />
+              <input x-model="beatPriceChars.color" placeholder="Color"
+                class="border rounded px-2 py-1.5 text-sm dark:bg-gray-700 dark:border-gray-600" />
+              <input x-model="beatPriceChars.country_of_origin" placeholder="Country of Origin"
+                class="border rounded px-2 py-1.5 text-sm dark:bg-gray-700 dark:border-gray-600" />
+              <input x-model="beatPriceChars.features" placeholder="Key Features"
+                class="col-span-2 border rounded px-2 py-1.5 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+          </div>
+          <div class="flex items-center gap-3">
+            <label class="text-sm font-medium"># of Suppliers:</label>
+            <select x-model.number="beatPriceForm.max_results" class="border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600">
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="20">20</option>
+            </select>
+          </div>
+          <button @click="runBeatPrice()" :disabled="beatPriceLoading"
+            class="w-full bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white font-semibold py-2.5 rounded-lg text-sm transition">
+            <span x-text="beatPriceLoading ? '💡 Searching...' : '💡 Find Better Prices'"></span>
+          </button>
+        </div>
+
+        <!-- Results (right col on desktop, below on mobile) -->
+        <div x-show="beatPriceResults.length > 0" class="space-y-3">
+          <h3 class="font-semibold" x-text="`${beatPriceResults.length} supplier${beatPriceResults.length !== 1 ? 's' : ''} found`"></h3>
+          <template x-for="(r, idx) in beatPriceResults" :key="r.url">
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 flex gap-4">
+              <div class="w-16 h-16 flex-shrink-0 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden flex items-center justify-center">
+                <img x-show="r.image" :src="r.image" class="w-full h-full object-cover"
+                  @error="$el.style.display='none'" loading="lazy" />
+                <span x-show="!r.image" class="text-2xl">🏭</span>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-start justify-between gap-2">
+                  <div class="text-sm font-semibold line-clamp-1" x-text="r.title"></div>
+                  <span x-show="r.price" class="text-green-600 font-bold text-sm flex-shrink-0" x-text="r.price"></span>
+                </div>
+                <div class="text-xs text-gray-500 line-clamp-2 mt-0.5" x-text="r.description"></div>
+                <div class="flex items-center gap-3 mt-2">
+                  <span x-show="r.model_number" class="text-xs font-mono text-gray-400" x-text="r.model_number"></span>
+                  <a :href="r.url" target="_blank" rel="noopener"
+                    class="text-xs text-blue-500 hover:underline truncate" x-text="r.domain"></a>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div x-show="!beatPriceResults.length && !beatPriceLoading"
+          class="bg-white dark:bg-gray-800 rounded-xl shadow p-12 text-center text-gray-400">
+          <div class="text-4xl mb-2">💡</div>
+          <div>Fill in the form and click "Find Better Prices"</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== FIND ME CUSTOMERS VIEW ===== -->
+    <div x-show="currentView === 'find-customers'" class="p-6">
+      <div class="mb-6">
+        <h2 class="text-2xl font-bold mb-1">Find Me New Customers</h2>
+        <p class="text-sm text-gray-500">Search the web and business directories for potential customers matching your criteria.</p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Form -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 space-y-4">
+          <div class="grid grid-cols-2 gap-3">
+            <div class="col-span-2">
+              <label class="text-sm font-medium block mb-1">Type of Business / Industry</label>
+              <input x-model="findCustForm.business_type" placeholder="e.g. bakery, donut shop, food service..."
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="text-sm font-medium block mb-1">Location (city, state, country)</label>
+              <input x-model="findCustForm.location" placeholder="e.g. Chicago, IL or Texas"
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="text-sm font-medium block mb-1">Radius (miles)</label>
+              <input x-model="findCustForm.radius_miles" type="number" min="1" placeholder="50"
+                class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+          </div>
+
+          <!-- Keywords -->
+          <div>
+            <label class="text-sm font-medium block mb-1">Additional Keywords</label>
+            <div class="flex gap-2 mb-2">
+              <input x-model="findCustKeywordInput" @keyup.enter="addFindCustKeyword()"
+                placeholder="Add keyword..." class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+              <button @click="addFindCustKeyword()" class="bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 px-3 rounded-lg text-sm">+</button>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <template x-for="kw in findCustKeywords" :key="kw">
+                <span class="flex items-center gap-1 bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 text-xs px-2 py-1 rounded-full">
+                  <span x-text="kw"></span>
+                  <button @click="removeFindCustKeyword(kw)" class="hover:text-red-500 font-bold ml-0.5">×</button>
+                </span>
+              </template>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <label class="text-sm font-medium">Results:</label>
+            <select x-model.number="findCustForm.max_results" class="border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600">
+              <option value="10">10</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+            </select>
+          </div>
+
+          <div class="text-xs text-gray-400 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+            Searches the web and business directories including Google, LinkedIn, Facebook, and other public sources.
+          </div>
+
+          <button @click="runFindCustomers()" :disabled="findCustLoading"
+            class="w-full bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-semibold py-2.5 rounded-lg text-sm transition">
+            <span x-text="findCustLoading ? '👥 Searching...' : '👥 Find Customers'"></span>
+          </button>
+        </div>
+
+        <!-- Results -->
+        <div>
+          <div x-show="findCustResults.length > 0" class="space-y-3">
+            <h3 class="font-semibold" x-text="`${findCustResults.length} potential customer${findCustResults.length !== 1 ? 's' : ''} found`"></h3>
+            <template x-for="(r, idx) in findCustResults" :key="r.url">
+              <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+                <div class="flex items-start justify-between gap-2 mb-1">
+                  <div class="font-semibold text-sm line-clamp-1" x-text="r.name"></div>
+                  <span class="text-xs text-gray-400 flex-shrink-0 font-mono" x-text="'#' + (idx + 1)"></span>
+                </div>
+                <div class="text-xs text-gray-500 line-clamp-3 mb-2" x-text="r.description"></div>
+                <a :href="r.url" target="_blank" rel="noopener"
+                  class="text-xs text-blue-500 hover:underline truncate block" x-text="r.domain || r.url"></a>
+              </div>
+            </template>
+          </div>
+          <div x-show="!findCustResults.length && !findCustLoading"
+            class="bg-white dark:bg-gray-800 rounded-xl shadow p-12 text-center text-gray-400">
+            <div class="text-4xl mb-2">👥</div>
+            <div>Fill in your customer profile and click "Find Customers"</div>
+          </div>
+        </div>
       </div>
     </div>
 

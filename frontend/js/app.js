@@ -27,6 +27,9 @@ function app() {
       { id: 'scans',        icon: '🔍', label: 'Scans',             badge: 0 },
       { id: 'duplicates',   icon: '🔁', label: 'Duplicates',        badge: 0 },
       { id: 'source-products', icon: '📂', label: 'Source Products',   badge: 0 },
+      { id: 'find-product',    icon: '🔎', label: 'Find Product',       badge: 0 },
+      { id: 'beat-price',      icon: '💡', label: 'Beat This Price',    badge: 0 },
+      { id: 'find-customers',  icon: '👥', label: 'Find Customers',     badge: 0 },
       { id: 'sync',         icon: '🔄', label: 'Source Sync',        badge: 0 },
       { id: 'scheduler',    icon: '⏰', label: 'Scheduler',         badge: 0 },
       { id: 'reports',      icon: '📋', label: 'Reports',           badge: 0 },
@@ -64,6 +67,32 @@ function app() {
     sourceProductDomain: '',
     sourceProductSearch: '',
     sourceProductSelected: {},
+
+    // Dashboard live log tail
+    logTail: [],
+    _logPollTimer: null,
+
+    // Find This Product
+    findProductQuery: '',
+    findProductIds: [],
+    findProductCatalogSearch: '',
+    findProductCatalogResults: [],
+    findProductMaxResults: 5,
+    findProductResults: [],
+    findProductLoading: false,
+
+    // Beat This Price
+    beatPriceForm: { description: '', price_min: '', price_max: '', max_results: 10 },
+    beatPriceChars: { size: '', color: '', manufacturer: '', country_of_origin: '', features: '' },
+    beatPriceResults: [],
+    beatPriceLoading: false,
+
+    // Find Me Customers
+    findCustForm: { business_type: '', location: '', radius_miles: '', max_results: 20 },
+    findCustKeywords: [],
+    findCustKeywordInput: '',
+    findCustResults: [],
+    findCustLoading: false,
 
     // Source Sync / Domain Comparison
     domainComparison: { products: [], total: 0, all_domains: [], page: 1, pages: 1 },
@@ -148,6 +177,7 @@ function app() {
       this.loadDuplicates();
       this.loadSourceSites();
       this.connectWebSocket();
+      this._logPollTimer = setInterval(() => { this.loadLogTail(); }, 3000);
     },
 
     // -----------------------------------------------------------------------
@@ -453,6 +483,164 @@ function app() {
         await this.loadSourceProducts(null, this.sourceProducts.page);
         await this.loadStats();
       } catch (e) { this.toast('Failed to deactivate: ' + e.message, 'error'); }
+    },
+
+    // -----------------------------------------------------------------------
+    // Dashboard — live log tail + cycle status helpers
+    // -----------------------------------------------------------------------
+    async loadLogTail() {
+      try {
+        const r = await this.api('/api/logs/tail?lines=7');
+        this.logTail = r.lines || [];
+      } catch {}
+    },
+
+    cycleStatusLabel() {
+      const s = this.cycleStatus?.status || 'idle';
+      if (s === 'scanning' && this.scanStatus?.message) return this.scanStatus.message;
+      const started = this.cycleStatus?.domains_started?.length || 0;
+      const done = this.cycleStatus?.domains_complete?.length || 0;
+      return {
+        idle: 'No scan running',
+        scanning: `Scanning source domains (${done}/${started} complete)`,
+        dedup_running: 'Running deduplication across all domains...',
+        review_pending: 'Awaiting duplicate review',
+        complete: 'Scan cycle complete',
+      }[s] || s;
+    },
+
+    cycleNextStep() {
+      const s = this.cycleStatus?.status || 'idle';
+      const done = this.cycleStatus?.domains_complete?.length || 0;
+      const total = this.cycleStatus?.domains_started?.length || 0;
+      const pending = this.stats?.pending_duplicates || 0;
+      const ts = this.cycleStatus?.last_complete_at
+        ? new Date(this.cycleStatus.last_complete_at).toLocaleString() : '';
+      return {
+        idle: 'Click "Scan All Sources" to begin a full data collection cycle.',
+        scanning: done < total
+          ? `${total - done} domain${total - done !== 1 ? 's' : ''} still scanning — deduplication will start automatically when all finish.`
+          : 'All domains scanned — deduplication starting...',
+        dedup_running: 'Identifying duplicate products across all source domains. This may take a few minutes.',
+        review_pending: pending
+          ? `${pending} duplicate${pending !== 1 ? 's' : ''} need review. Go to Duplicates, resolve them, then approve the cycle.`
+          : 'Deduplication complete. Approve the cycle to finalize.',
+        complete: `Last cycle finished${ts ? ' at ' + ts : ''}. Start a new scan when ready.`,
+      }[s] || '';
+    },
+
+    // -----------------------------------------------------------------------
+    // Find This Product
+    // -----------------------------------------------------------------------
+    async findProductSearchCatalog() {
+      try {
+        const params = new URLSearchParams({ per_page: 20 });
+        if (this.findProductCatalogSearch) params.set('search', this.findProductCatalogSearch);
+        const r = await this.api(`/api/products?${params}`);
+        this.findProductCatalogResults = r?.products || [];
+      } catch {}
+    },
+
+    findProductToggle(id) {
+      const idx = this.findProductIds.indexOf(id);
+      if (idx >= 0) {
+        this.findProductIds = this.findProductIds.filter(x => x !== id);
+      } else if (this.findProductIds.length < 5) {
+        this.findProductIds = [...this.findProductIds, id];
+      } else {
+        this.toast('Maximum 5 products can be selected', 'info');
+      }
+    },
+
+    async runFindProduct() {
+      if (!this.findProductQuery && !this.findProductIds.length) {
+        this.toast('Enter a query or select products from the catalog', 'info');
+        return;
+      }
+      this.findProductLoading = true;
+      this.findProductResults = [];
+      try {
+        const res = await this.api('/api/search/find-product', {
+          method: 'POST',
+          body: JSON.stringify({
+            product_ids: this.findProductIds.length ? this.findProductIds : null,
+            query: this.findProductQuery || null,
+            max_results: this.findProductMaxResults,
+          }),
+        });
+        this.findProductResults = res?.results || [];
+        if (!this.findProductResults.length) this.toast('No results found — try a different query', 'info');
+      } catch (e) { this.toast('Search failed: ' + e.message, 'error'); }
+      finally { this.findProductLoading = false; }
+    },
+
+    // -----------------------------------------------------------------------
+    // Beat This Price
+    // -----------------------------------------------------------------------
+    async runBeatPrice() {
+      if (!this.beatPriceForm.description) {
+        this.toast('Enter a product description', 'info');
+        return;
+      }
+      this.beatPriceLoading = true;
+      this.beatPriceResults = [];
+      try {
+        const chars = Object.fromEntries(
+          Object.entries(this.beatPriceChars).filter(([, v]) => v)
+        );
+        const res = await this.api('/api/search/beat-price', {
+          method: 'POST',
+          body: JSON.stringify({
+            description: this.beatPriceForm.description,
+            price_min: this.beatPriceForm.price_min ? parseFloat(this.beatPriceForm.price_min) : null,
+            price_max: this.beatPriceForm.price_max ? parseFloat(this.beatPriceForm.price_max) : null,
+            characteristics: Object.keys(chars).length ? chars : null,
+            max_results: this.beatPriceForm.max_results,
+          }),
+        });
+        this.beatPriceResults = res?.results || [];
+        if (!this.beatPriceResults.length) this.toast('No suppliers found — try broadening the description', 'info');
+      } catch (e) { this.toast('Search failed: ' + e.message, 'error'); }
+      finally { this.beatPriceLoading = false; }
+    },
+
+    // -----------------------------------------------------------------------
+    // Find Me New Customers
+    // -----------------------------------------------------------------------
+    addFindCustKeyword() {
+      const kw = this.findCustKeywordInput.trim();
+      if (kw && !this.findCustKeywords.includes(kw)) {
+        this.findCustKeywords = [...this.findCustKeywords, kw];
+        this.findCustKeywordInput = '';
+      }
+    },
+
+    removeFindCustKeyword(kw) {
+      this.findCustKeywords = this.findCustKeywords.filter(k => k !== kw);
+    },
+
+    async runFindCustomers() {
+      if (!this.findCustForm.business_type && !this.findCustForm.location && !this.findCustKeywords.length) {
+        this.toast('Enter at least a business type, location, or keyword', 'info');
+        return;
+      }
+      this.findCustLoading = true;
+      this.findCustResults = [];
+      try {
+        const res = await this.api('/api/search/find-customers', {
+          method: 'POST',
+          body: JSON.stringify({
+            business_type: this.findCustForm.business_type || null,
+            location: this.findCustForm.location || null,
+            radius_miles: this.findCustForm.radius_miles ? parseInt(this.findCustForm.radius_miles) : null,
+            keywords: this.findCustKeywords.length ? this.findCustKeywords : null,
+            max_results: this.findCustForm.max_results,
+          }),
+        });
+        this.findCustResults = res?.results || [];
+        if (!this.findCustResults.length) this.toast('No customers found — try different criteria', 'info');
+      } catch (e) { this.toast('Search failed: ' + e.message, 'error'); }
+      finally { this.findCustLoading = false; }
     },
 
     // Returns an array of comparison rows for the duplicate card.
