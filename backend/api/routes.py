@@ -569,9 +569,11 @@ def list_competitors(
     db: Session = Depends(get_db_session)
 ):
     """F14: List all tracked competitors with scan history."""
-    total = db.query(func.count(Competitor.id)).scalar() or 0
+    source_domains = {s["domain"] for s in config.get("source_sites", default=[])}
+    query = db.query(Competitor).filter(~Competitor.domain.in_(source_domains))
+    total = query.count()
     competitors = (
-        db.query(Competitor).order_by(Competitor.domain)
+        query.order_by(Competitor.domain)
         .offset((page - 1) * per_page).limit(per_page).all()
     )
     return {

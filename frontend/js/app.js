@@ -546,7 +546,6 @@ function app() {
     },
 
     async deleteCompetitor(id) {
-      if (!confirm('Deactivate this competitor?')) return;
       try {
         await this.api(`/api/competitors/${id}`, { method: 'DELETE' });
         this.toast('Competitor deactivated', 'success');
