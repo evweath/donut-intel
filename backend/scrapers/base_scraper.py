@@ -236,7 +236,15 @@ class BaseScraper:
             except Exception:
                 pass
 
-    _CONTEXT_ERRORS = ("ERR_INVALID_HANDLE", "ERR_SOCKET_NOT_CONNECTED", "Target page, context or browser has been closed")
+    _CONTEXT_ERRORS = (
+        "ERR_INVALID_HANDLE",
+        "ERR_SOCKET_NOT_CONNECTED",
+        "Target page, context or browser has been closed",
+        "network connection was lost",
+        "ERR_NETWORK_CHANGED",
+        "ERR_CONNECTION_RESET",
+        "ERR_INTERNET_DISCONNECTED",
+    )
 
     async def _reset_browser(self) -> None:
         """Full Playwright + Chromium restart when the browser process is unrecoverable."""
