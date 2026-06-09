@@ -172,14 +172,6 @@ async def _execute_job(job_id: int):
                 None, lambda: export_products(fmt=fmt, triggered_by="scheduler")
             )
 
-        elif job_type == "dedup":
-            from backend.database.db import session_scope
-            from backend.dedup.engine import DeduplicationEngine
-            def _run_dedup():
-                with session_scope() as db:
-                    DeduplicationEngine().run(db)
-            await asyncio.get_running_loop().run_in_executor(None, _run_dedup)
-
         with session_scope() as db:
             job = db.get(ScheduledJob, job_id)
             if job:

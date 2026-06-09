@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Donut Intel Platform — macOS Setup Script (F48/F51)
+# prodComp — macOS Setup Script (F48/F51)
 # Run once: bash setup_macos.sh
 # ==============================================================================
 set -euo pipefail
@@ -20,7 +20,7 @@ warn()    { echo -e "${YELLOW}[WARN]${NC}  $1"; }
 error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 echo ""
-echo "  🍩  Donut Intel Platform — macOS Setup"
+echo "  🍩  prodComp — macOS Setup"
 echo "  ======================================="
 echo ""
 
@@ -80,9 +80,9 @@ fi
 # 7. Prompt for Google Drive DB path
 echo ""
 echo -e "${YELLOW}  DATABASE CONFIGURATION${NC}"
-echo "  By default, the database is stored at: $DATA_DIR/donut_intel.db"
+echo "  By default, the database is stored at: $DATA_DIR/prodcomp.db"
 echo "  For shared Google Drive access, use a path like:"
-echo "  /Users/$(whoami)/Library/CloudStorage/GoogleDrive-YOUR@gmail.com/My\\ Drive/donut-intel/donut_intel.db"
+echo "  /Users/$(whoami)/Library/CloudStorage/GoogleDrive-YOUR@gmail.com/My\\ Drive/donut-intel/prodcomp.db"
 echo ""
 read -p "  Enter custom DB path (or press Enter to use default): " DB_PATH_INPUT
 if [ -n "$DB_PATH_INPUT" ]; then
@@ -103,7 +103,7 @@ EOF
   mkdir -p "$(dirname "$DB_PATH_INPUT")" 2>/dev/null || true
   success "Database path set to: $DB_PATH_INPUT"
 else
-  success "Using default database path: $DATA_DIR/donut_intel.db"
+  success "Using default database path: $DATA_DIR/prodcomp.db"
 fi
 
 # 8. Generate start.sh
@@ -118,7 +118,7 @@ PORT=$(python3 -c "import yaml; d=yaml.safe_load(open('config/settings.yaml')); 
 CERT="$SCRIPT_DIR/certs/cert.pem"
 KEY="$SCRIPT_DIR/certs/key.pem"
 
-echo "🍩 Starting Donut Intel Platform on https://localhost:$PORT"
+echo "🍩 Starting prodComp on https://localhost:$PORT"
 echo "   API docs: https://localhost:$PORT/api/docs"
 echo "   Press Ctrl+C to stop"
 echo ""
@@ -138,7 +138,7 @@ success "start.sh created"
 # 9. Generate stop.sh
 cat > "$SCRIPT_DIR/stop.sh" << 'STOPSCRIPT'
 #!/usr/bin/env bash
-echo "Stopping Donut Intel Platform..."
+echo "Stopping prodComp..."
 pkill -f "uvicorn backend.app:app" 2>/dev/null && echo "Stopped." || echo "No running instance found."
 STOPSCRIPT
 chmod +x "$SCRIPT_DIR/stop.sh"

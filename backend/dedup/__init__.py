@@ -1,1 +1,0 @@
-"""Donut Intel Platform package."""

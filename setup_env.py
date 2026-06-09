@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Cross-platform setup script for Donut Intel Platform.
+Cross-platform setup script for prodComp.
 Works on macOS and Windows.
 Usage: python setup_env.py
 
@@ -55,7 +55,7 @@ def generate_certs() -> None:
 
 
 def main() -> None:
-    print('Donut Intel Platform — Setup')
+    print('prodComp — Setup')
     print('=' * 40)
 
     total = 5

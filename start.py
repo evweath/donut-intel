@@ -32,7 +32,7 @@ def main() -> None:
     use_tls = cert.exists() and key.exists()
 
     protocol = 'https' if use_tls else 'http'
-    print(f'Starting Donut Intel Platform on {protocol}://localhost:{port}')
+    print(f'Starting prodComp on {protocol}://localhost:{port}')
     if not use_tls:
         print('  [WARN] No TLS certs found — running on HTTP. Run: python generate_certs.py')
     print(f'  API docs: {protocol}://localhost:{port}/api/docs')

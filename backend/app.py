@@ -1,5 +1,5 @@
 """
-Donut Intel Platform — Main FastAPI application.
+prodComp — Main FastAPI application.
 HTTPS via self-signed cert (F31), session auth (F38), static frontend serving.
 Scheduler (F43), Webhooks (F72) wired at startup.
 """
@@ -97,9 +97,9 @@ PROJECT_ROOT = Path(__file__).parent.parent
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
 app = FastAPI(
-    title="Donut Intel Platform",
-    description="Product intelligence and competitor pricing for donut/bakery supply market",
-    version="2.0.0",
+    title="prodComp",
+    description="Product comparison and competitor pricing intelligence",
+    version="1.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
 )
@@ -260,7 +260,7 @@ async def serve_spa(request: Request, path: str = ""):
 
 @app.on_event("startup")
 async def on_startup():
-    logger.info("Donut Intel Platform v2.0 starting up...")
+    logger.info("prodComp v2.0 starting up...")
     init_db()
     logger.info(f"Database ready at: {config.db_path()}")
 
@@ -311,4 +311,4 @@ async def on_shutdown():
     task = getattr(app.state, "log_tail_task", None)
     if task is not None:
         task.cancel()
-    logger.info("Donut Intel Platform shut down.")
+    logger.info("prodComp shut down.")
