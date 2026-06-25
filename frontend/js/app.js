@@ -20,6 +20,13 @@ function app() {
     toasts: [],
     _toastId: 0,
 
+    // Search-engine selection (per page). Populated from GET /api/search/engines.
+    // searchEngines: [{key,label,group}] registry. pageEngines: {page:[key,...]}.
+    // engineSel: {page: {key: bool}} — which engines are checked on each page.
+    searchEngines: [],
+    pageEngines: {},
+    engineSel: { find_product: {}, beat_price: {}, competitors: {}, products: {} },
+
     // Nav items
     navItems: [
       { id: 'dashboard',    icon: '📊', label: 'Dashboard',        badge: 0 },
@@ -142,6 +149,8 @@ function app() {
     priceMatrixSortDir: 'asc',  // 'asc' = cheapest first, 'desc' = most expensive first
     priceMatrixFilters: { search: '', manufacturer: '', category: '', source_site: '' },
     priceMatrixSelected: {},
+    priceMatrixExpanded: {},      // product_id -> bool; absent/true = expanded, false = collapsed
+    priceMatrixGroupSort: 'az',   // 'az' | 'za' — alphabetical sort of the product groups
     priceMatrixHasSearched: false,
     loadingMatrix: false,
 
@@ -166,6 +175,21 @@ function app() {
     webhookForm: { url: '', events: ['price_alert', 'scan_complete', 'competitor_scan_complete'], secret: '' },
     managedLists: { manufacturers: [], excluded: [], competitors: [] },
     newManagedUrl: { manufacturer: '', excluded: '', competitor: '' },
+    shopifyCredentials: {},    // domain -> { shopify_store_url, shopify_client_id, shopify_client_secret, shopify_access_token, sync_draft, sync_archived }
+    shopifyTestStatus: {},     // domain -> 'idle'|'testing'|'ok'|'warn'|'error'
+    shopifyTestMessage: {},    // domain -> string
+    shopifyConnLog: [],        // recent Shopify connection-attempt log lines
+    shopifyConnLogTimer: null, // setInterval handle for polling the connection log
+    newSiteForm: { show: false, name: '', shopify_store_url: '', is_destination: false },
+    removeSiteConfirm: null,   // domain pending removal confirmation
+
+    // Live Search Log — external product/competitor search activity panel,
+    // shown at the top of every page that runs external searches.
+    searchLog: [],
+    searchLogTimer: null,
+    searchLogCollapsed: false,
+    // Views that perform external product/competitor searches.
+    searchLogViews: ['products', 'competitors', 'pricing', 'find-product', 'beat-price'],
 
     // WebSocket
     ws: null,
@@ -183,6 +207,7 @@ function app() {
 
     async postLoginInit() {
       await Promise.all([
+        this.loadSearchEngines(),
         this.loadStats(),
         this.loadFilterOptions(),
         this.loadScanSessions(),
@@ -193,6 +218,8 @@ function app() {
         this.loadExportHistory(),
       ]);
       this.loadSourceSites();
+      this.startShopifyConnLog();
+      this.startSearchLog();
       this.connectWebSocket();
       // Initial population; subsequent updates arrive via the WebSocket
       // 'log_tail' event (see handleWsMessage). The setInterval poll is a
@@ -392,6 +419,63 @@ function app() {
     },
 
     // -----------------------------------------------------------------------
+    // Search-engine selection — checkboxes that narrow which engines/shopping
+    // sites a page's search algorithm queries. The list is server-driven
+    // (/api/search/engines) so it never drifts from what the backend runs.
+    // -----------------------------------------------------------------------
+    async loadSearchEngines() {
+      try {
+        const cfg = await this.api('/api/search/engines');
+        if (!cfg) return;
+        this.searchEngines = cfg.engines || [];
+        this.pageEngines = cfg.pages || {};
+        // Default: every engine a page uses starts checked (preserves prior behavior).
+        for (const page of Object.keys(this.engineSel)) {
+          const sel = {};
+          for (const key of (this.pageEngines[page] || [])) sel[key] = true;
+          this.engineSel[page] = sel;
+        }
+      } catch (e) {
+        // Non-fatal: pages fall back to "all engines" (engines: [] -> backend treats as all).
+        console.warn('Failed to load search engines:', e.message);
+      }
+    },
+
+    // Registry entries (with label/group) for the engines a given page uses.
+    enginesForPage(page) {
+      const keys = this.pageEngines[page] || [];
+      return keys
+        .map(k => this.searchEngines.find(e => e.key === k))
+        .filter(Boolean);
+    },
+
+    toggleEngine(page, key) {
+      if (!this.engineSel[page]) this.engineSel[page] = {};
+      this.engineSel[page][key] = !this.engineSel[page][key];
+    },
+
+    toggleAllEngines(page, value) {
+      const sel = {};
+      for (const key of (this.pageEngines[page] || [])) sel[key] = value;
+      this.engineSel[page] = sel;
+    },
+
+    // Keys currently checked on a page — the array sent as `engines` in requests.
+    selectedEngines(page) {
+      const sel = this.engineSel[page] || {};
+      return Object.keys(sel).filter(k => sel[k]);
+    },
+
+    anyEngineChecked(page) {
+      return this.selectedEngines(page).length > 0;
+    },
+
+    allEnginesChecked(page) {
+      const keys = this.pageEngines[page] || [];
+      return keys.length > 0 && keys.every(k => this.engineSel[page]?.[k]);
+    },
+
+    // -----------------------------------------------------------------------
     // Dashboard
     // -----------------------------------------------------------------------
     async loadStats() {
@@ -482,6 +566,7 @@ function app() {
               max_competitors: target,
               num_workers: Math.min(4, ids.length),
               max_urls: 150,
+              engines: this.selectedEngines('products'),
             }),
           });
         } else {
@@ -493,6 +578,7 @@ function app() {
               max_urls: 150,
               num_fetchers: 4,
               pause_after: 100,
+              engines: this.selectedEngines('products'),
             }),
           });
         }
@@ -737,6 +823,7 @@ function app() {
             max_results: this.findProductMaxResults,
             min_fuzzy_score: this.findProductMinFuzzyScore || 0,
             search_competitor_sites: true,
+            engines: this.selectedEngines('find_product'),
           }),
         });
         this.findProductResults = res?.results || [];
@@ -799,6 +886,7 @@ function app() {
         price_max: this.beatPriceForm.price_max ? parseFloat(this.beatPriceForm.price_max) : null,
         characteristics: Object.keys(chars).length ? chars : null,
         max_results: this.beatPriceForm.max_results || 10,
+        engines: this.selectedEngines('beat_price'),
       };
 
       try {
@@ -939,7 +1027,7 @@ function app() {
       try {
         await this.api('/api/competitors/web-search-scan', {
           method: 'POST',
-          body: JSON.stringify({ max_results: n, product_limit: limit || null }),
+          body: JSON.stringify({ max_results: n, product_limit: limit || null, engines: this.selectedEngines('competitors') }),
         });
         const productDesc = limit ? `${limit} products` : 'all products';
         this.toast(`Web search scan started — ${productDesc}, top ${n} results each`, 'info');
@@ -1191,6 +1279,38 @@ function app() {
       return (domain || '').split('.')[0];
     },
 
+    // ---- Price-matrix accordion: collapse/expand + alphabetical group sort ----
+    // A group is expanded unless explicitly set to false, so groups start open.
+    isGroupExpanded(pid) {
+      return this.priceMatrixExpanded[pid] !== false;
+    },
+
+    togglePriceMatrixGroup(pid) {
+      const cur = this.priceMatrixExpanded[pid] !== false;
+      this.priceMatrixExpanded = { ...this.priceMatrixExpanded, [pid]: !cur };
+    },
+
+    expandAllGroups() {
+      const e = { ...this.priceMatrixExpanded };
+      (this.priceMatrix.rows || []).forEach(r => { e[r.product_id] = true; });
+      this.priceMatrixExpanded = e;
+    },
+
+    collapseAllGroups() {
+      const e = { ...this.priceMatrixExpanded };
+      (this.priceMatrix.rows || []).forEach(r => { e[r.product_id] = false; });
+      this.priceMatrixExpanded = e;
+    },
+
+    // Product groups ordered alphabetically by name (A→Z or Z→A).
+    sortedMatrixRows() {
+      const rows = [...(this.priceMatrix.rows || [])];
+      const dir = this.priceMatrixGroupSort === 'za' ? -1 : 1;
+      rows.sort((a, b) =>
+        (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' }) * dir);
+      return rows;
+    },
+
     // -----------------------------------------------------------------------
     // Scheduler (F43-F47)
     // -----------------------------------------------------------------------
@@ -1290,6 +1410,19 @@ function app() {
       try {
         this.settingsData = await this.api('/api/settings') || {};
         this.loadSourceSites();
+        // Populate Shopify credential forms from saved settings
+        const creds = {};
+        for (const site of (this.settingsData.source_sites || [])) {
+          creds[site.domain] = {
+            shopify_store_url: site.shopify_store_url || '',
+            shopify_client_id: site.shopify_client_id || site.shopify_api_key || '',
+            shopify_client_secret: site.shopify_client_secret || '',
+            shopify_access_token: site.shopify_access_token || '',
+            sync_draft: site.sync_draft || false,
+            sync_archived: site.sync_archived || false,
+          };
+        }
+        this.shopifyCredentials = creds;
         // Load webhook settings
         const wh = await this.api('/api/settings/webhook');
         if (wh) {
@@ -1297,6 +1430,148 @@ function app() {
           this.webhookForm.events = wh.events || [];
         }
       } catch {}
+    },
+
+    // -----------------------------------------------------------------------
+    // Shopify connection log + source-site credentials
+    // -----------------------------------------------------------------------
+    async loadShopifyConnLog() {
+      try {
+        const r = await this.api('/api/shopify/connection-log?n=150');
+        const box = document.getElementById('shopifyConnLogBox');
+        const atBottom = box ? (box.scrollHeight - box.scrollTop - box.clientHeight < 24) : true;
+        this.shopifyConnLog = (r && r.lines) || [];
+        // Keep the view pinned to the newest line unless the user scrolled up.
+        if (atBottom) this.$nextTick(() => { const b = document.getElementById('shopifyConnLogBox'); if (b) b.scrollTop = b.scrollHeight; });
+      } catch (e) { /* panel is best-effort; ignore transient errors */ }
+    },
+
+    startShopifyConnLog() {
+      this.loadShopifyConnLog();
+      if (this.shopifyConnLogTimer) return;
+      this.shopifyConnLogTimer = setInterval(() => {
+        if (this.currentView === 'settings') this.loadShopifyConnLog();
+      }, 3000);
+    },
+
+    async clearShopifyConnLog() {
+      try { await this.api('/api/shopify/connection-log/clear', { method: 'POST' }); } catch (e) {}
+      this.shopifyConnLog = [];
+    },
+
+    // -----------------------------------------------------------------------
+    // Live Search Log (external product/competitor search activity)
+    // -----------------------------------------------------------------------
+    onSearchLogPage() {
+      return this.searchLogViews.includes(this.currentView);
+    },
+
+    async loadSearchLog() {
+      try {
+        const r = await this.api('/api/search-log?n=200');
+        const box = document.getElementById('searchLogBox');
+        const atBottom = box ? (box.scrollHeight - box.scrollTop - box.clientHeight < 28) : true;
+        this.searchLog = (r && r.entries) || [];
+        // Keep pinned to newest unless the user scrolled up.
+        if (atBottom) this.$nextTick(() => { const b = document.getElementById('searchLogBox'); if (b) b.scrollTop = b.scrollHeight; });
+      } catch (e) { /* best-effort panel */ }
+    },
+
+    startSearchLog() {
+      this.loadSearchLog();
+      if (this.searchLogTimer) return;
+      this.searchLogTimer = setInterval(() => {
+        if (this.onSearchLogPage() && !this.searchLogCollapsed) this.loadSearchLog();
+      }, 2000);
+    },
+
+    async clearSearchLog() {
+      try { await this.api('/api/search-log/clear', { method: 'POST' }); } catch (e) {}
+      this.searchLog = [];
+    },
+
+    // Color a log entry block by its content.
+    searchLogClass(entry) {
+      const t = entry || '';
+      if (t.includes('✓ match')) return 'text-green-300';
+      if (t.includes('🔎')) return 'text-cyan-300';
+      if (t.includes('…')) return 'text-yellow-300';
+      return 'text-gray-300';
+    },
+
+    async saveShopifyCredentials(domain) {
+      const creds = this.shopifyCredentials[domain] || {};
+      try {
+        await this.api(`/api/source-sites/${encodeURIComponent(domain)}/credentials`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            shopify_store_url: creds.shopify_store_url || '',
+            shopify_client_id: creds.shopify_client_id || '',
+            shopify_client_secret: creds.shopify_client_secret || '',
+            shopify_access_token: creds.shopify_access_token || '',
+            sync_draft: creds.sync_draft || false,
+            sync_archived: creds.sync_archived || false,
+          }),
+        });
+        this.toast(`Credentials saved for ${domain}`, 'success', 2500);
+        await this.loadSettings();
+      } catch (e) { this.toast('Failed to save credentials: ' + e.message, 'error'); }
+    },
+
+    async addSourceSite() {
+      const url = (this.newSiteForm.shopify_store_url || '').trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
+      if (!this.newSiteForm.name.trim() || !url) {
+        this.toast('Name and Store URL are required', 'error'); return;
+      }
+      // Derive domain from the myshopify URL (strip scheme, keep host)
+      const domain = url.split('/')[0].toLowerCase();
+      try {
+        await this.api('/api/source-sites', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: this.newSiteForm.name.trim(),
+            domain,
+            shopify_store_url: 'https://' + url,
+            is_destination: this.newSiteForm.is_destination,
+          }),
+        });
+        this.newSiteForm = { show: false, name: '', shopify_store_url: '', is_destination: false };
+        this.toast(`Store "${domain}" added`, 'success', 3000);
+        await this.loadSettings();
+      } catch (e) { this.toast('Failed to add store: ' + e.message, 'error'); }
+    },
+
+    async removeSourceSite(domain) {
+      if (this.removeSiteConfirm !== domain) {
+        this.removeSiteConfirm = domain;
+        setTimeout(() => { if (this.removeSiteConfirm === domain) this.removeSiteConfirm = null; }, 4000);
+        return;
+      }
+      this.removeSiteConfirm = null;
+      try {
+        await this.api(`/api/source-sites/${encodeURIComponent(domain)}`, { method: 'DELETE' });
+        this.toast(`Removed ${domain}`, 'success', 2500);
+        await this.loadSettings();
+      } catch (e) { this.toast('Failed to remove: ' + e.message, 'error'); }
+    },
+
+    async testShopifyConnection(domain) {
+      this.shopifyTestStatus = { ...this.shopifyTestStatus, [domain]: 'testing' };
+      try {
+        const result = await this.api(`/api/source-sites/${encodeURIComponent(domain)}/test-connection`, { method: 'POST' });
+        // Auth + shop read can succeed while product read is blocked by a missing
+        // scope (products_ok === false) — surface that as a warning, not a green ✓.
+        const status = !result.ok ? 'error' : (result.products_ok === false ? 'warn' : 'ok');
+        this.shopifyTestStatus = { ...this.shopifyTestStatus, [domain]: status };
+        this.shopifyTestMessage = {
+          ...this.shopifyTestMessage,
+          [domain]: !result.ok ? result.error
+            : (result.products_ok === false ? result.warning : `Connected — ${result.shop_name} (${result.plan})`),
+        };
+      } catch (e) {
+        this.shopifyTestStatus = { ...this.shopifyTestStatus, [domain]: 'error' };
+        this.shopifyTestMessage = { ...this.shopifyTestMessage, [domain]: e.message };
+      }
     },
 
     async loadManagedLists() {

@@ -12,6 +12,7 @@ See .claude/investigations/beat-this-price.md.
 import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
+from backend.search.core.constants import narrow_engines
 from backend.search.core.engines import _google_shopping_search, _image_search
 from backend.search.core.parse import _img_index
 from backend.search.core.rank import (
@@ -31,6 +32,7 @@ async def find_suppliers(
     characteristics: Optional[Dict] = None,
     max_results: int = 10,
     pattern_queries: Optional[List[Tuple[str, str]]] = None,
+    selected_engines: Optional[set] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """
     Find alternate suppliers using pattern-based title queries.
@@ -51,31 +53,51 @@ async def find_suppliers(
     if not pattern_queries:
         pattern_queries = [("full", description)]
 
+    # Narrow each query's engine list by the user's selection (None = all). The
+    # pattern query carries every shopping surface so all are reachable from the
+    # page's checkboxes.
+    # NOTE: the default list MUST keep 'shopping' and 'bing_shopping' — they are
+    # the primary structured-price sources. The user can deselect them, but the
+    # code must never drop them by accident. See
+    # .claude/investigations/beat-this-price.md.
+    pattern_engines = narrow_engines(
+        ['ddg', 'bing', 'google', 'yahoo',
+         'shopping', 'bing_shopping', 'yahoo_shopping', 'ddg_shopping'],
+        selected_engines)
+    shopping_on = selected_engines is None or 'shopping' in selected_engines
+
     # Build all search tasks; track which pattern each task belongs to.
     all_tasks: List[Any] = []
     task_pids: List[str] = []   # parallel list: pattern_id per task slot
 
-    for pid, query in pattern_queries:
-        base = ' '.join(filter(None, [query] + char_parts + [price_hint]))
-        all_tasks.append(multi_engine_search(
-            f"buy {base} supplier wholesale price", max_results=max_results * 2,
-            engines=['ddg', 'bing', 'google', 'yahoo', 'shopping', 'bing_shopping'],
-        ))
-        task_pids.append(pid)
+    if pattern_engines:
+        for pid, query in pattern_queries:
+            base = ' '.join(filter(None, [query] + char_parts + [price_hint]))
+            all_tasks.append(multi_engine_search(
+                f"buy {base} supplier wholesale price", max_results=max_results * 2,
+                engines=pattern_engines,
+                match_pct=30, log_label="beat price",
+            ))
+            task_pids.append(pid)
 
     # Supplemental searches on model/category (no pattern attribution).
     supp_start = len(all_tasks)
     if model_number:
-        all_tasks.append(multi_engine_search(
-            f"buy {model_number} {price_hint}".strip(), max_results=max_results * 2,
-            engines=['bing', 'google', 'yahoo'],
-        ))
-        all_tasks.append(_google_shopping_search(f"buy {model_number}", max_results=max_results))
+        model_engines = narrow_engines(['bing', 'google', 'yahoo'], selected_engines)
+        if model_engines:
+            all_tasks.append(multi_engine_search(
+                f"buy {model_number} {price_hint}".strip(), max_results=max_results * 2,
+                engines=model_engines, match_pct=30, log_label="beat price",
+            ))
+        if shopping_on:
+            all_tasks.append(_google_shopping_search(f"buy {model_number}", max_results=max_results))
     if category:
-        all_tasks.append(multi_engine_search(
-            f"buy {category} wholesale {price_hint}".strip(), max_results=max_results * 2,
-            engines=['ddg', 'bing', 'google', 'yahoo'],
-        ))
+        cat_engines = narrow_engines(['ddg', 'bing', 'google', 'yahoo'], selected_engines)
+        if cat_engines:
+            all_tasks.append(multi_engine_search(
+                f"buy {category} wholesale {price_hint}".strip(), max_results=max_results * 2,
+                engines=cat_engines, match_pct=30, log_label="beat price",
+            ))
 
     all_raw, images = await asyncio.gather(
         asyncio.gather(*all_tasks, return_exceptions=True),

@@ -34,7 +34,7 @@ async def test_find_suppliers_includes_shopping_engines():
     """
     captured_engine_calls = []
 
-    async def fake_multi_engine_search(query, max_results=10, engines=None):
+    async def fake_multi_engine_search(query, max_results=10, engines=None, **kwargs):
         captured_engine_calls.append(engines or [])
         return []
 
@@ -85,7 +85,7 @@ async def test_find_suppliers_price_preserved_from_shopping_result():
 
     call_count = 0
 
-    async def fake_multi_engine_search(query, max_results=10, engines=None):
+    async def fake_multi_engine_search(query, max_results=10, engines=None, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -113,6 +113,64 @@ async def test_find_suppliers_price_preserved_from_shopping_result():
     )
 
 
+# ---------------------------------------------------------------------------
+# Search-engine selection — user-chosen engine narrowing
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_find_suppliers_narrows_to_selected_engines():
+    """
+    Passing selected_engines must intersect each query's engine list with the
+    selection, and must skip the direct Google Shopping call when 'shopping' is
+    not selected. Powers the per-page search-engine checkbox UI.
+    """
+    captured_engine_calls = []
+
+    async def fake_multi_engine_search(query, max_results=10, engines=None, **kwargs):
+        captured_engine_calls.append(engines or [])
+        return []
+
+    shopping_mock = AsyncMock(return_value=[])
+    with patch('backend.search.pages.beat_price.multi_engine_search', side_effect=fake_multi_engine_search), \
+         patch('backend.search.pages.beat_price._google_shopping_search', new=shopping_mock), \
+         patch('backend.search.pages.beat_price._image_search', new_callable=AsyncMock, return_value=[]):
+        await find_suppliers(
+            description='Acme Widget Model X100',
+            model_number='X100',
+            category='widgets',
+            selected_engines={'google', 'bing'},
+        )
+
+    assert captured_engine_calls, 'no multi_engine_search calls were made'
+    for engines in captured_engine_calls:
+        # Every call must be a subset of the user's selection — nothing leaks in.
+        assert set(engines).issubset({'google', 'bing'}), (
+            f'call used un-selected engines: {engines}'
+        )
+        assert engines, 'narrowed engine list should be non-empty when selection overlaps'
+    # 'shopping' was not selected, so the direct Google Shopping pass is skipped.
+    shopping_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_find_suppliers_default_engines_unchanged():
+    """selected_engines=None (the default) must preserve the full engine list."""
+    captured = []
+
+    async def fake_multi_engine_search(query, max_results=10, engines=None, **kwargs):
+        captured.append(engines or [])
+        return []
+
+    with patch('backend.search.pages.beat_price.multi_engine_search', side_effect=fake_multi_engine_search), \
+         patch('backend.search.pages.beat_price._google_shopping_search', new_callable=AsyncMock, return_value=[]), \
+         patch('backend.search.pages.beat_price._image_search', new_callable=AsyncMock, return_value=[]):
+        await find_suppliers(description='Acme Widget Model X100')
+
+    assert captured, 'no multi_engine_search calls were made'
+    # The pattern query keeps all six default engines including both shopping ones.
+    assert 'shopping' in captured[0] and 'bing_shopping' in captured[0]
+
+
 @pytest.mark.asyncio
 async def test_find_suppliers_returns_results_when_shopping_has_prices():
     """
@@ -134,7 +192,7 @@ async def test_find_suppliers_returns_results_when_shopping_has_prices():
         for i in range(1, 4)
     ]
 
-    async def fake_multi_engine_search(query, max_results=10, engines=None):
+    async def fake_multi_engine_search(query, max_results=10, engines=None, **kwargs):
         return shopping_results
 
     with patch('backend.search.pages.beat_price.multi_engine_search', side_effect=fake_multi_engine_search), \

@@ -90,6 +90,37 @@
       </template>
     </div>
 
+    <!-- ===== LIVE SEARCH LOG (top of every page that runs external searches) ===== -->
+    <div x-show="onSearchLogPage()"
+         class="sticky top-0 z-30 px-6 pt-3 pb-2 bg-gray-100/85 dark:bg-gray-900/85 backdrop-blur-sm border-b border-gray-200 dark:border-gray-800">
+      <!-- Full page width, scrollable -->
+      <div class="w-full">
+        <div class="bg-gray-900 rounded-lg shadow-lg border border-gray-700 overflow-hidden">
+          <div class="flex items-center justify-between px-2 py-1 bg-gray-800 border-b border-gray-700">
+            <span class="text-[11px] font-semibold text-cyan-300">🔎 Live Search Log</span>
+            <div class="flex items-center gap-1">
+              <button @click="clearSearchLog()" class="text-[10px] text-gray-400 hover:text-white px-1" title="Clear log">Clear</button>
+              <button @click="searchLogCollapsed = !searchLogCollapsed"
+                class="text-[10px] text-gray-400 hover:text-white px-1"
+                :title="searchLogCollapsed ? 'Expand' : 'Collapse'"
+                x-text="searchLogCollapsed ? '▸' : '▾'"></button>
+            </div>
+          </div>
+          <div id="searchLogBox" x-show="!searchLogCollapsed"
+            class="overflow-y-auto font-mono text-[10px] leading-snug p-2 break-words text-gray-200"
+            style="height: 13rem;">
+            <template x-if="searchLog.length === 0">
+              <div class="text-gray-500">No external searches yet. Run a product or competitor search to see live activity here — % match, search term, websites searched, and results.</div>
+            </template>
+            <template x-for="(entry, i) in searchLog" :key="i">
+              <div class="mb-1 pb-1 border-b border-gray-800/70 whitespace-pre-wrap"
+                   :class="searchLogClass(entry)" x-text="entry"></div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ===== DASHBOARD VIEW ===== -->
     <div x-show="currentView === 'dashboard'" class="p-6">
       <div class="flex items-center justify-between mb-6">
@@ -317,7 +348,7 @@
           <input type="number" min="1" max="50" x-model.number="productCompMax"
             class="border rounded px-2 py-1 text-sm w-14 text-center dark:bg-gray-700 dark:border-gray-600" />
           <label class="text-xs text-gray-500 whitespace-nowrap">competitors per product</label>
-          <button @click="runProductCompSearch()" :disabled="productCompRunning || !Object.values(productSelected).some(Boolean)"
+          <button @click="runProductCompSearch()" :disabled="productCompRunning || !Object.values(productSelected).some(Boolean) || !anyEngineChecked('products')"
             class="bg-orange-500 hover:bg-orange-600 disabled:opacity-40 text-white px-4 py-1.5 rounded text-sm font-medium flex items-center gap-1.5">
             <span x-show="!productCompRunning">🔍 Competitor Search</span>
             <span x-show="productCompRunning" class="flex items-center gap-1.5">
@@ -325,6 +356,25 @@
               Searching...
             </span>
           </button>
+        </div>
+        <!-- Search engine / shopping site selection -->
+        <div class="w-full border-t dark:border-gray-700 pt-2 mt-1">
+          <div class="flex items-center gap-3 flex-wrap">
+            <span class="text-xs font-medium text-gray-500 whitespace-nowrap">Search sites:</span>
+            <template x-for="e in enginesForPage('products')" :key="e.key">
+              <label class="flex items-center gap-1.5 text-xs cursor-pointer">
+                <input type="checkbox" class="w-3.5 h-3.5" :checked="engineSel['products'][e.key]" @change="toggleEngine('products', e.key)" />
+                <span x-text="e.label"></span>
+                <span class="text-[10px] text-gray-400" x-show="e.group === 'shopping'">🛒</span>
+              </label>
+            </template>
+            <span class="text-xs flex gap-2 ml-auto">
+              <button type="button" @click="toggleAllEngines('products', true)" class="text-orange-500 hover:underline">All</button>
+              <span class="text-gray-300 dark:text-gray-600">|</span>
+              <button type="button" @click="toggleAllEngines('products', false)" class="text-orange-500 hover:underline">None</button>
+            </span>
+          </div>
+          <div class="text-xs text-red-500 mt-1" x-show="!anyEngineChecked('products')">Select at least one site to search.</div>
         </div>
         <!-- Progress indicator -->
         <div x-show="productCompProgress" class="w-full text-xs text-gray-500 flex items-center gap-2 mt-1">
@@ -677,7 +727,39 @@
               <option value="10">10</option>
             </select>
           </div>
-          <button @click="runFindProduct()" :disabled="findProductLoading"
+          <!-- Search engine / shopping site selection -->
+          <div class="border rounded-lg p-3 dark:border-gray-600">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-sm font-medium">Search engines &amp; shopping sites</span>
+              <span class="text-xs flex gap-2">
+                <button type="button" @click="toggleAllEngines('find_product', true)" class="text-orange-500 hover:underline">All</button>
+                <span class="text-gray-300 dark:text-gray-600">|</span>
+                <button type="button" @click="toggleAllEngines('find_product', false)" class="text-orange-500 hover:underline">None</button>
+              </span>
+            </div>
+            <div class="grid grid-cols-2 gap-x-4 gap-y-1">
+              <div>
+                <div class="text-[10px] uppercase tracking-wide text-gray-400 mb-1">Search Engines</div>
+                <template x-for="e in enginesForPage('find_product').filter(x => x.group === 'engine')" :key="e.key">
+                  <label class="flex items-center gap-2 text-sm py-0.5 cursor-pointer">
+                    <input type="checkbox" class="w-4 h-4" :checked="engineSel['find_product'][e.key]" @change="toggleEngine('find_product', e.key)" />
+                    <span x-text="e.label"></span>
+                  </label>
+                </template>
+              </div>
+              <div>
+                <div class="text-[10px] uppercase tracking-wide text-gray-400 mb-1">Shopping Sites</div>
+                <template x-for="e in enginesForPage('find_product').filter(x => x.group === 'shopping')" :key="e.key">
+                  <label class="flex items-center gap-2 text-sm py-0.5 cursor-pointer">
+                    <input type="checkbox" class="w-4 h-4" :checked="engineSel['find_product'][e.key]" @change="toggleEngine('find_product', e.key)" />
+                    <span x-text="e.label"></span>
+                  </label>
+                </template>
+              </div>
+            </div>
+            <div class="text-xs text-red-500 mt-1" x-show="!anyEngineChecked('find_product')">Select at least one site to search.</div>
+          </div>
+          <button @click="runFindProduct()" :disabled="findProductLoading || !anyEngineChecked('find_product')"
             class="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-semibold py-2.5 rounded-lg text-sm transition">
             <span x-text="findProductLoading ? '🔍 Searching...' : '🔎 Find This Product'"></span>
           </button>
@@ -921,7 +1003,39 @@
               <option value="20">20</option>
             </select>
           </div>
-          <button @click="runBeatPrice()" :disabled="beatPriceLoading"
+          <!-- Search engine / shopping site selection -->
+          <div class="border rounded-lg p-3 dark:border-gray-600">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-sm font-medium">Search engines &amp; shopping sites</span>
+              <span class="text-xs flex gap-2">
+                <button type="button" @click="toggleAllEngines('beat_price', true)" class="text-green-600 hover:underline">All</button>
+                <span class="text-gray-300 dark:text-gray-600">|</span>
+                <button type="button" @click="toggleAllEngines('beat_price', false)" class="text-green-600 hover:underline">None</button>
+              </span>
+            </div>
+            <div class="grid grid-cols-2 gap-x-4 gap-y-1">
+              <div>
+                <div class="text-[10px] uppercase tracking-wide text-gray-400 mb-1">Search Engines</div>
+                <template x-for="e in enginesForPage('beat_price').filter(x => x.group === 'engine')" :key="e.key">
+                  <label class="flex items-center gap-2 text-sm py-0.5 cursor-pointer">
+                    <input type="checkbox" class="w-4 h-4" :checked="engineSel['beat_price'][e.key]" @change="toggleEngine('beat_price', e.key)" />
+                    <span x-text="e.label"></span>
+                  </label>
+                </template>
+              </div>
+              <div>
+                <div class="text-[10px] uppercase tracking-wide text-gray-400 mb-1">Shopping Sites</div>
+                <template x-for="e in enginesForPage('beat_price').filter(x => x.group === 'shopping')" :key="e.key">
+                  <label class="flex items-center gap-2 text-sm py-0.5 cursor-pointer">
+                    <input type="checkbox" class="w-4 h-4" :checked="engineSel['beat_price'][e.key]" @change="toggleEngine('beat_price', e.key)" />
+                    <span x-text="e.label"></span>
+                  </label>
+                </template>
+              </div>
+            </div>
+            <div class="text-xs text-red-500 mt-1" x-show="!anyEngineChecked('beat_price')">Select at least one site to search.</div>
+          </div>
+          <button @click="runBeatPrice()" :disabled="beatPriceLoading || !anyEngineChecked('beat_price')"
             class="w-full bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white font-semibold py-2.5 rounded-lg text-sm transition">
             <span x-show="!beatPriceLoading">💡 Find Better Prices</span>
             <span x-show="beatPriceLoading">💡 Searching...</span>
@@ -1194,7 +1308,7 @@
             <label class="text-xs text-gray-500 whitespace-nowrap">Results per product:</label>
             <input type="number" min="1" max="100" x-model="webSearchMaxResults"
               class="border rounded px-2 py-1 text-sm w-16 dark:bg-gray-700 dark:border-gray-600 text-center" />
-            <button @click="startWebSearchScan()" :disabled="webSearchRunning"
+            <button @click="startWebSearchScan()" :disabled="webSearchRunning || !anyEngineChecked('competitors')"
               class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-1.5 rounded text-xs font-medium flex items-center gap-1.5">
               <span x-show="!webSearchRunning">🔍 Web Search Scan</span>
               <span x-show="webSearchRunning" class="flex items-center gap-1.5">
@@ -1203,6 +1317,27 @@
               </span>
             </button>
           </div>
+        </div>
+        <!-- Search engine / shopping site selection -->
+        <div class="mt-3 border-t dark:border-gray-700 pt-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-medium text-gray-600 dark:text-gray-300">Search engines &amp; shopping sites to query</span>
+            <span class="text-xs flex gap-2">
+              <button type="button" @click="toggleAllEngines('competitors', true)" class="text-blue-600 hover:underline">All</button>
+              <span class="text-gray-300 dark:text-gray-600">|</span>
+              <button type="button" @click="toggleAllEngines('competitors', false)" class="text-blue-600 hover:underline">None</button>
+            </span>
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1">
+            <template x-for="e in enginesForPage('competitors')" :key="e.key">
+              <label class="flex items-center gap-2 text-sm py-0.5 cursor-pointer">
+                <input type="checkbox" class="w-4 h-4" :checked="engineSel['competitors'][e.key]" @change="toggleEngine('competitors', e.key)" />
+                <span x-text="e.label"></span>
+                <span class="text-[10px] text-gray-400" x-show="e.group === 'shopping'">🛒</span>
+              </label>
+            </template>
+          </div>
+          <div class="text-xs text-red-500 mt-1" x-show="!anyEngineChecked('competitors')">Select at least one site to search.</div>
         </div>
         <!-- Checkpoint banner -->
         <div x-show="webSearchCheckpoint" x-cloak
@@ -1469,6 +1604,21 @@
               :class="priceMatrixSortDir==='desc' ? 'bg-orange-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600'"
               class="px-3 py-1 rounded transition-colors">↓ Most expensive first</button>
           </div>
+          <div class="flex items-center gap-1 mr-2 text-sm">
+            <span class="text-gray-500">Sort groups:</span>
+            <button @click="priceMatrixGroupSort='az'"
+              :class="priceMatrixGroupSort==='az' ? 'bg-orange-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600'"
+              class="px-3 py-1 rounded transition-colors">A→Z</button>
+            <button @click="priceMatrixGroupSort='za'"
+              :class="priceMatrixGroupSort==='za' ? 'bg-orange-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600'"
+              class="px-3 py-1 rounded transition-colors">Z→A</button>
+          </div>
+          <div class="flex items-center gap-1 mr-2 text-sm">
+            <button @click="expandAllGroups()"
+              class="px-3 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors">Expand all</button>
+            <button @click="collapseAllGroups()"
+              class="px-3 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors">Collapse all</button>
+          </div>
           <button @click="startWebSearchScan()" :disabled="webSearchRunning"
             class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm flex items-center gap-1"
             title="Search Google, Bing, DuckDuckGo &amp; Yahoo for each product to find competitor prices">
@@ -1532,68 +1682,73 @@
       <div x-show="priceMatrixHasSearched && priceMatrix.rows && priceMatrix.rows.length > 0">
         <div x-show="loadingMatrix" class="text-center py-8 text-gray-400">Loading price matrix...</div>
         <div x-show="!loadingMatrix" class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
-          <table class="w-full text-sm price-matrix">
-            <thead class="bg-gray-50 dark:bg-gray-700 text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide">
-              <tr>
-                <th class="px-4 py-2" style="width: 2.5rem;">
-                  <input type="checkbox" class="w-4 h-4"
-                    :checked="(priceMatrix.rows||[]).length > 0 && (priceMatrix.rows||[]).every(r => priceMatrixSelected[r.product_id])"
-                    @change="toggleAllPriceMatrix()" />
-                </th>
-                <th class="text-left px-4 py-2 font-semibold" style="width: 18rem;">Product</th>
-                <th class="text-right px-4 py-2 font-semibold" style="width: 7rem;">Our Price</th>
-                <th class="text-left px-4 py-2 font-semibold">Competitor Prices
-                  <span class="ml-2 normal-case text-[10px] text-gray-400 font-normal"
-                    x-text="priceMatrixSortDir === 'desc' ? '(most expensive first)' : '(cheapest first)'"></span>
-                </th>
-                <th class="px-4 py-2" style="width: 5rem;"></th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
-              <template x-for="row in priceMatrix.rows" :key="row.product_id">
-                <tr class="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                  <td class="px-4 py-2" style="width: 2.5rem;" @click.stop>
-                    <input type="checkbox" class="w-4 h-4"
-                      :checked="!!priceMatrixSelected[row.product_id]"
-                      @change="priceMatrixSelected[row.product_id] = $event.target.checked; priceMatrixSelected = {...priceMatrixSelected}" />
-                  </td>
-                  <td class="px-4 py-2">
-                    <div class="font-medium text-sm truncate" x-text="row.title" :title="row.title"></div>
-                  </td>
-                  <td class="px-4 py-2 text-right whitespace-nowrap">
-                    <span class="font-bold text-orange-600 text-sm" x-text="fmtPrice(row.our_price)"></span>
-                  </td>
-                  <td class="px-4 py-2">
-                    <div class="overflow-x-auto">
-                      <div class="flex items-center gap-2 whitespace-nowrap text-xs">
-                        <template x-for="comp in matchedCompetitors(row)" :key="comp.domain">
-                          <a :href="comp.url || '#'"
-                             :target="comp.url ? '_blank' : ''"
-                             class="inline-flex items-baseline gap-1 px-2 py-0.5 rounded transition flex-shrink-0"
-                             :class="[!comp.url && 'pointer-events-none', comp.low_confidence ? 'bg-yellow-50 dark:bg-yellow-900/20 hover:bg-yellow-100 dark:hover:bg-yellow-900/40 border border-yellow-300 dark:border-yellow-700' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600']"
-                             :title="comp.low_confidence ? 'Low confidence match — verify manually' : ''">
-                            <span class="text-gray-500 dark:text-gray-300" x-text="compShortName(comp.domain)"></span>
-                            <span x-show="comp.low_confidence" class="text-yellow-500 text-[10px]" title="Low confidence">~</span>
-                            <span class="font-semibold"
-                                  :class="priceDiffClass(priceDiff(row.our_price, comp.price))"
-                                  x-text="fmtPrice(comp.price)"></span>
-                            <span :class="priceDiffDollarClass(priceDiffDollar(row.our_price, comp.price))"
-                                  x-show="priceDiffDollar(row.our_price, comp.price) !== null"
-                                  x-text="fmtDollarDiff(priceDiffDollar(row.our_price, comp.price))"></span>
-                          </a>
-                        </template>
-                        <span x-show="matchedCompetitors(row).length === 0" class="text-gray-400 italic">No competitor matches yet</span>
-                      </div>
+          <!-- Collapsible accordion: each baseline product is a header line; its
+               competitors are listed beneath, cheapest → most expensive, each a
+               link to that competitor's product page. Click the header to toggle. -->
+          <div class="divide-y divide-gray-200 dark:divide-gray-700">
+            <template x-for="row in sortedMatrixRows()" :key="row.product_id">
+              <div>
+                <!-- Baseline product (our product) header line -->
+                <div @click="togglePriceMatrixGroup(row.product_id)"
+                     class="flex items-center gap-3 px-4 py-3 cursor-pointer select-none bg-orange-50/50 dark:bg-orange-900/10 hover:bg-orange-100/60 dark:hover:bg-orange-900/20 transition">
+                  <span class="text-gray-400 text-xs w-3 flex-shrink-0 transition-transform"
+                        :class="isGroupExpanded(row.product_id) ? 'rotate-90' : ''">▶</span>
+                  <input type="checkbox" class="w-4 h-4 flex-shrink-0" @click.stop
+                    :checked="!!priceMatrixSelected[row.product_id]"
+                    @change="priceMatrixSelected[row.product_id] = $event.target.checked; priceMatrixSelected = {...priceMatrixSelected}" />
+                  <div class="flex-1 min-w-0">
+                    <div class="font-semibold text-sm truncate" x-text="row.title" :title="row.title"></div>
+                    <div class="text-[11px] text-gray-400">
+                      <span class="font-medium text-orange-600">Our product</span>
+                      <span> · </span>
+                      <span x-text="matchedCompetitors(row).length"></span>
+                      <span x-text="matchedCompetitors(row).length === 1 ? 'competitor' : 'competitors'"></span>
                     </div>
-                  </td>
-                  <td class="px-4 py-2 text-right whitespace-nowrap">
-                    <button @click="window.open(`/api/reports/price-comparison/${row.product_id}`, '_blank')"
-                      class="text-xs text-gray-400 hover:text-blue-700">Report</button>
-                  </td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
+                  </div>
+                  <div class="text-right whitespace-nowrap flex-shrink-0">
+                    <div class="text-[10px] uppercase tracking-wide text-gray-400">Our Price</div>
+                    <div class="font-bold text-orange-600 text-sm" x-text="fmtPrice(row.our_price)"></div>
+                  </div>
+                  <button @click.stop="window.open(`/api/reports/price-comparison/${row.product_id}`, '_blank')"
+                    class="text-xs text-gray-400 hover:text-blue-700 ml-2 flex-shrink-0">Report</button>
+                </div>
+
+                <!-- Competitor lines (one per line, cheapest first) -->
+                <div x-show="isGroupExpanded(row.product_id)">
+                  <template x-for="comp in matchedCompetitors(row)" :key="comp.domain">
+                    <a :href="comp.url || '#'"
+                       :target="comp.url ? '_blank' : ''"
+                       :rel="comp.url ? 'noopener noreferrer' : ''"
+                       class="flex items-center gap-3 pl-12 pr-4 py-2 border-t border-gray-100 dark:border-gray-700/60 hover:bg-gray-50 dark:hover:bg-gray-700/40 transition"
+                       :class="!comp.url && 'pointer-events-none opacity-60'"
+                       :title="comp.url ? ('Open ' + comp.domain + ' product page') : 'No product link available'">
+                      <span class="flex-1 min-w-0 truncate text-sm">
+                        <span class="text-blue-700 dark:text-blue-400 hover:underline" x-text="comp.domain"></span>
+                        <span x-show="comp.low_confidence" class="text-yellow-600 dark:text-yellow-500 text-[10px] ml-1.5"
+                              title="Low confidence match — verify manually">~ low&nbsp;confidence</span>
+                        <span x-show="comp.in_stock === false" class="text-red-400 text-[10px] ml-1.5">out of stock</span>
+                      </span>
+                      <span class="font-semibold text-sm whitespace-nowrap"
+                            :class="priceDiffClass(priceDiff(row.our_price, comp.price))"
+                            x-text="fmtPrice(comp.price)"></span>
+                      <span class="text-xs w-16 text-right whitespace-nowrap"
+                            :class="priceDiffClass(priceDiff(row.our_price, comp.price))"
+                            x-show="priceDiff(row.our_price, comp.price) !== null"
+                            x-text="(priceDiff(row.our_price, comp.price) >= 0 ? '+' : '') + priceDiff(row.our_price, comp.price) + '%'"></span>
+                      <span class="w-24 text-right whitespace-nowrap"
+                            :class="priceDiffDollarClass(priceDiffDollar(row.our_price, comp.price))"
+                            x-show="priceDiffDollar(row.our_price, comp.price) !== null"
+                            x-text="fmtDollarDiff(priceDiffDollar(row.our_price, comp.price))"></span>
+                    </a>
+                  </template>
+                  <div x-show="matchedCompetitors(row).length === 0"
+                       class="pl-12 pr-4 py-2 text-xs text-gray-400 italic border-t border-gray-100 dark:border-gray-700/60">
+                    No competitor matches yet
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
           <!-- Pagination -->
           <div class="flex items-center justify-between px-4 py-3 border-t dark:border-gray-700">
             <span class="text-sm text-gray-500">
@@ -1892,6 +2047,30 @@
 
       <div class="space-y-4">
 
+        <!-- Shopify Connection Log -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <div class="flex items-center justify-between mb-1">
+            <h3 class="font-semibold text-orange-500">🔌 Shopify Connection Log</h3>
+            <div class="flex gap-2">
+              <button @click="loadShopifyConnLog()"
+                class="text-xs px-2 py-1 rounded border dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700">Refresh</button>
+              <button @click="clearShopifyConnLog()"
+                class="text-xs px-2 py-1 rounded border dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700">Clear</button>
+            </div>
+          </div>
+          <div class="text-xs text-gray-400 mb-2">Live output of connection attempts to the source Shopify stores. Refreshes every 3s.</div>
+          <div id="shopifyConnLogBox"
+            class="w-full h-44 overflow-auto bg-gray-900 text-green-300 font-mono text-xs leading-snug rounded p-3 whitespace-pre-wrap break-words">
+            <template x-if="shopifyConnLog.length === 0">
+              <div class="text-gray-500">No connection attempts logged yet.</div>
+            </template>
+            <template x-for="(line, i) in shopifyConnLog" :key="i">
+              <div class="py-0.5" x-text="line"
+                :class="line.includes('✗') ? 'text-red-400' : (line.includes('✓') ? 'text-green-300' : (line.includes('…') ? 'text-yellow-300' : 'text-gray-300'))"></div>
+            </template>
+          </div>
+        </div>
+
         <!-- Database -->
         <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
           <h3 class="font-semibold mb-3 text-orange-500">🗄 Database</h3>
@@ -2030,6 +2209,163 @@
           </div>
         </div>
 
+
+        <!-- Shopify API Credentials -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+          <h3 class="font-semibold mb-1 text-orange-500">🛍️ Shopify API Credentials</h3>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            Enter the Admin API credentials for each store. These are used for live sync, diff scanning, and writing back to Shopify.
+            Credentials are stored in <code class="bg-gray-100 dark:bg-gray-700 px-1 rounded">config/settings.yaml</code> — keep that file out of source control.
+          </p>
+          <div class="space-y-5">
+            <template x-for="site in (settingsData.source_sites || [])" :key="site.domain">
+              <div class="border border-gray-200 dark:border-gray-700 rounded-xl p-4">
+                <div class="flex items-center justify-between mb-3">
+                  <div>
+                    <span class="font-medium text-sm" x-text="site.name"></span>
+                    <span class="ml-2 text-xs text-gray-400 font-mono" x-text="site.domain"></span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                  <!-- Connection status badge -->
+                  <span x-show="shopifyTestStatus[site.domain] === 'ok'"
+                    class="text-xs bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 px-2 py-0.5 rounded-full font-medium">
+                    ✓ Connected — <span x-text="shopifyTestMessage[site.domain]"></span>
+                  </span>
+                  <span x-show="shopifyTestStatus[site.domain] === 'warn'"
+                    class="text-xs bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300 px-2 py-0.5 rounded-full font-medium">
+                    ⚠ <span x-text="shopifyTestMessage[site.domain]"></span>
+                  </span>
+                  <span x-show="shopifyTestStatus[site.domain] === 'error'"
+                    class="text-xs bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 px-2 py-0.5 rounded-full font-medium">
+                    ✗ <span x-text="shopifyTestMessage[site.domain]"></span>
+                  </span>
+                  <span x-show="shopifyTestStatus[site.domain] === 'testing'"
+                    class="text-xs bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300 px-2 py-0.5 rounded-full font-medium">
+                    Testing…
+                  </span>
+                  <button @click="removeSourceSite(site.domain)"
+                    :class="removeSiteConfirm === site.domain ? 'bg-red-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-red-100 dark:hover:bg-red-900 hover:text-red-600'"
+                    class="text-xs font-medium px-2 py-1 rounded-lg transition"
+                    :title="removeSiteConfirm === site.domain ? 'Click again to confirm removal' : 'Remove this store'">
+                    <span x-text="removeSiteConfirm === site.domain ? 'Confirm remove?' : '✕ Remove'"></span>
+                  </button>
+                  </div>
+                </div>
+                <div class="grid grid-cols-1 gap-2">
+                  <div>
+                    <label class="text-xs font-medium block mb-1 text-gray-600 dark:text-gray-300">Store URL</label>
+                    <input type="text" placeholder="your-store.myshopify.com"
+                      :value="shopifyCredentials[site.domain]?.shopify_store_url || ''"
+                      @input="shopifyCredentials[site.domain] = { ...(shopifyCredentials[site.domain] || {}), shopify_store_url: $event.target.value }"
+                      class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                  </div>
+                  <div class="grid grid-cols-2 gap-2">
+                    <div>
+                      <label class="text-xs font-medium block mb-1 text-gray-600 dark:text-gray-300">Client ID</label>
+                      <input type="text" placeholder="Client ID from Shopify app"
+                        :value="shopifyCredentials[site.domain]?.shopify_client_id || ''"
+                        @input="shopifyCredentials[site.domain] = { ...(shopifyCredentials[site.domain] || {}), shopify_client_id: $event.target.value }"
+                        class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                    </div>
+                    <div>
+                      <label class="text-xs font-medium block mb-1 text-gray-600 dark:text-gray-300">Client Secret <span class="font-normal text-gray-400">(shpss_…)</span></label>
+                      <input type="password" placeholder="shpss_••••••••••••••••"
+                        :value="shopifyCredentials[site.domain]?.shopify_client_secret || ''"
+                        @input="shopifyCredentials[site.domain] = { ...(shopifyCredentials[site.domain] || {}), shopify_client_secret: $event.target.value }"
+                        class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                    </div>
+                  </div>
+                  <div>
+                    <label class="text-xs font-medium block mb-1 text-gray-600 dark:text-gray-300">Access Token <span class="font-normal text-gray-400">(shpat_… or atkn_…)</span></label>
+                    <input type="password" placeholder="shpat_… or atkn_••••••••••••••••"
+                      :value="shopifyCredentials[site.domain]?.shopify_access_token || ''"
+                      @input="shopifyCredentials[site.domain] = { ...(shopifyCredentials[site.domain] || {}), shopify_access_token: $event.target.value }"
+                      class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                  </div>
+                </div>
+                <!-- Sync scope checkboxes -->
+                <div class="mt-3">
+                  <label class="text-xs font-medium block mb-1.5 text-gray-600 dark:text-gray-300">Include in scans</label>
+                  <div class="flex items-center gap-4">
+                    <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-not-allowed select-none">
+                      <input type="checkbox" checked disabled class="accent-green-500" />
+                      <span class="text-green-600 font-medium">Active</span>
+                      <span class="text-gray-400">(always)</span>
+                    </label>
+                    <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"
+                      :class="shopifyCredentials[site.domain]?.shopify_access_token ? 'text-gray-700 dark:text-gray-300' : 'text-gray-400 cursor-not-allowed'"
+                      :title="shopifyCredentials[site.domain]?.shopify_access_token ? '' : 'Requires Access Token'">
+                      <input type="checkbox"
+                        :disabled="!shopifyCredentials[site.domain]?.shopify_access_token"
+                        :checked="shopifyCredentials[site.domain]?.sync_draft || false"
+                        @change="shopifyCredentials[site.domain] = { ...(shopifyCredentials[site.domain] || {}), sync_draft: $event.target.checked }"
+                        class="accent-yellow-500" />
+                      <span class="font-medium text-yellow-600">Draft</span>
+                    </label>
+                    <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none"
+                      :class="shopifyCredentials[site.domain]?.shopify_access_token ? 'text-gray-700 dark:text-gray-300' : 'text-gray-400 cursor-not-allowed'"
+                      :title="shopifyCredentials[site.domain]?.shopify_access_token ? '' : 'Requires Access Token'">
+                      <input type="checkbox"
+                        :disabled="!shopifyCredentials[site.domain]?.shopify_access_token"
+                        :checked="shopifyCredentials[site.domain]?.sync_archived || false"
+                        @change="shopifyCredentials[site.domain] = { ...(shopifyCredentials[site.domain] || {}), sync_archived: $event.target.checked }"
+                        class="accent-gray-500" />
+                      <span class="font-medium text-gray-500">Archived</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="flex gap-2 mt-3">
+                  <button @click="saveShopifyCredentials(site.domain)"
+                    class="bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium px-4 py-1.5 rounded-lg transition">
+                    Save
+                  </button>
+                  <button @click="testShopifyConnection(site.domain)"
+                    :disabled="shopifyTestStatus[site.domain] === 'testing'"
+                    class="bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 text-xs font-medium px-4 py-1.5 rounded-lg transition disabled:opacity-40">
+                    Test Connection
+                  </button>
+                </div>
+              </div>
+            </template>
+
+            <!-- Add Store Form -->
+            <div x-show="!newSiteForm.show" class="pt-1">
+              <button @click="newSiteForm.show = true"
+                class="w-full border-2 border-dashed border-gray-300 dark:border-gray-600 hover:border-orange-400 dark:hover:border-orange-500 text-gray-400 hover:text-orange-500 rounded-xl py-3 text-sm font-medium transition">
+                + Add Store
+              </button>
+            </div>
+            <div x-show="newSiteForm.show" class="border border-orange-300 dark:border-orange-700 rounded-xl p-4 bg-orange-50 dark:bg-orange-900/10">
+              <h4 class="text-sm font-semibold mb-3 text-orange-600 dark:text-orange-400">New Shopify Store</h4>
+              <div class="grid grid-cols-1 gap-2">
+                <div>
+                  <label class="text-xs font-medium block mb-1 text-gray-600 dark:text-gray-300">Display Name</label>
+                  <input type="text" placeholder="My Store" x-model="newSiteForm.name"
+                    class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                </div>
+                <div>
+                  <label class="text-xs font-medium block mb-1 text-gray-600 dark:text-gray-300">Shopify Store URL <span class="font-normal text-gray-400">(mystore.myshopify.com)</span></label>
+                  <input type="text" placeholder="mystore.myshopify.com" x-model="newSiteForm.shopify_store_url"
+                    class="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                </div>
+                <label class="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 cursor-pointer">
+                  <input type="checkbox" x-model="newSiteForm.is_destination" class="accent-orange-500" />
+                  This is a <strong>destination</strong> store (products are synced TO this store)
+                </label>
+              </div>
+              <div class="flex gap-2 mt-3">
+                <button @click="addSourceSite()"
+                  class="bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium px-4 py-1.5 rounded-lg transition">
+                  Add Store
+                </button>
+                <button @click="newSiteForm = { show: false, name: '', shopify_store_url: '', is_destination: false }"
+                  class="bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 text-xs font-medium px-4 py-1.5 rounded-lg transition">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <!-- Price Alerts (F25) -->
         <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
@@ -2443,6 +2779,6 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=20260605-01"></script>
+<script src="/static/js/app.js?v=20260625-01"></script>
 </body>
 </html>

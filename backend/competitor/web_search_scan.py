@@ -238,6 +238,7 @@ async def run_web_search_scan(
     product_ids: Optional[List[int]] = None,
     callbacks: Optional[List[Callable]] = None,
     force: bool = False,
+    selected_engines: Optional[set] = None,
 ) -> dict:
     """
     Run a full web-search-first scan across the product catalog.
@@ -248,6 +249,8 @@ async def run_web_search_scan(
         product_ids: Limit to specific product IDs; None = all active products.
         callbacks: List of async (event, data) callables for progress events.
         force: Ignore 3-day cooldown for all competitors.
+        selected_engines: Set of engine keys to restrict the search to, or None
+            for all engines (the default).
 
     Returns:
         Summary dict with total_products, total_urls_visited, total_matches.
@@ -347,6 +350,9 @@ async def run_web_search_scan(
                 query=query,
                 max_results=max_results,
                 exclude_domains=skip_domains,
+                engines=list(selected_engines) if selected_engines else None,
+                match_pct=30,
+                log_label=f"competitor scan · {snap['title'][:32]}",
             )
 
         logger.info("[WEB-SCAN] Search returned %d results for %r", len(search_results), snap['title'])

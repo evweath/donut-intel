@@ -30,6 +30,7 @@ from backend.search.core.parse import (
     _parse_jsonld,
     _parse_meta,
 )
+from backend.search.core.constants import narrow_engines
 from backend.search.core.rank import multi_engine_search
 
 logger = logging.getLogger(__name__)
@@ -300,6 +301,7 @@ async def _process_one_product(
     emit: Callable = None,
     search_query_override: Optional[str] = None,
     log_prefix: str = '[PROD-SEARCH]',
+    selected_engines: Optional[set] = None,
 ) -> int:
     """Search for competitor listings of one product, looping through multiple query
     rounds until *max_competitors* matches are found.
@@ -452,6 +454,11 @@ async def _process_one_product(
                     logger.debug('[PROD-SEARCH]       Already stored  domain=%s', domain)
             else:
                 logger.info('[PROD-SEARCH]       MATCH  domain=%s  price=%s  confidence=%d%%', domain, price_str, int(result.confidence or 0))
+                try:
+                    from backend.search import searchlog
+                    searchlog.record_match(domain, confidence=result.confidence, product_title=snap['title'])
+                except Exception:
+                    pass
                 match = CompetitorProductMatch(
                     master_product_id=result.master_product_id,
                     competitor_id=competitor_id,
@@ -516,9 +523,17 @@ async def _process_one_product(
             'phase': 'searching', 'found': found_count, 'max': max_competitors,
         })
 
-        kwargs: Dict[str, Any] = {'query': round_query, 'max_results': 60, 'exclude_domains': source_domains}
-        if round_engines:
-            kwargs['engines'] = round_engines
+        # Narrow this round's engines by the user's selection. round_engines None
+        # means "all"; an empty result means the user deselected every engine this
+        # round would use, so skip the round entirely.
+        effective_engines = narrow_engines(round_engines, selected_engines)
+        if selected_engines is not None and not effective_engines:
+            continue
+
+        kwargs: Dict[str, Any] = {'query': round_query, 'max_results': 60, 'exclude_domains': source_domains,
+                                  'match_pct': 30, 'log_label': f"competitor · {snap['title'][:32]}"}
+        if effective_engines:
+            kwargs['engines'] = effective_engines
         raw_results = await multi_engine_search(**kwargs)
 
         # Keep only URLs not seen in previous rounds
@@ -581,6 +596,7 @@ async def run_product_competitor_search(
     num_fetchers: int = 4,
     pause_after: int = 100,
     callbacks: Optional[List[Callable]] = None,
+    selected_engines: Optional[set] = None,
 ) -> dict:
     """Sequential per-product competitor search (one product at a time).
 
@@ -629,6 +645,7 @@ async def run_product_competitor_search(
             enable_pause=True,
             emit=emit,
             search_query_override=search_query,
+            selected_engines=selected_engines,
         )
 
     # Found nothing? Distinguish "no competitors exist" from "couldn't reach the
@@ -676,6 +693,7 @@ async def run_parallel_product_competitor_search(
     max_urls: int = 50,
     product_ids: Optional[List[int]] = None,
     callbacks: Optional[List[Callable]] = None,
+    selected_engines: Optional[set] = None,
 ) -> dict:
     """Run competitor search across many products with a worker pool.
 
@@ -762,6 +780,7 @@ async def run_parallel_product_competitor_search(
                     max_urls=max_urls,
                     emit=emit,
                     log_prefix=prefix,
+                    selected_engines=selected_engines,
                 )
                 progress['total_found'] += found
                 processed_ids.add(snap['id'])

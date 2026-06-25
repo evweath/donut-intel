@@ -68,6 +68,8 @@ async def multi_engine_search(
     max_results: int = 20,
     exclude_domains: Optional[set] = None,
     engines: Optional[List[str]] = None,
+    match_pct: Optional[float] = None,
+    log_label: str = "",
 ) -> List[Dict[str, Any]]:
     """
     Search across DuckDuckGo, Bing, Google, Yahoo, and Google Shopping concurrently.
@@ -166,7 +168,14 @@ async def multi_engine_search(
     ranked_organic = sorted(domain_score.keys(), key=lambda d: -domain_score[d])
     # Shopping results first (have embedded prices), organic fills remaining slots.
     organic_slots = max(0, max_results - len(shopping_results))
-    return shopping_results + [domain_best[d] for d in ranked_organic[:organic_slots]]
+    final = shopping_results + [domain_best[d] for d in ranked_organic[:organic_slots]]
+
+    # Record this search for the Live Search Log panel: % match, term, the
+    # engines/websites queried, and the results. Best-effort, never raises.
+    from backend.search import searchlog
+    searchlog.record_search(query, engines, final, match_pct=match_pct, label=log_label)
+
+    return final
 
 
 def _aggregate_and_rank(

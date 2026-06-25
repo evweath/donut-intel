@@ -42,6 +42,11 @@ from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session, joinedload
 
 from backend.config import config
+from backend.search.core.constants import (
+    PAGE_ENGINES,
+    SEARCH_ENGINES,
+    coerce_selected_engines,
+)
 from backend.database.db import get_db_session, db_health_check, session_scope
 from backend.database.models import (
     BeatPriceResult,
@@ -981,6 +986,7 @@ class WebSearchScanRequest(BaseModel):
     product_limit: Optional[int] = None   # cap on number of products to scan; None = all
     product_ids: Optional[List[int]] = None   # None = all active products
     force: bool = False             # ignore 3-day cooldown
+    engines: Optional[List[str]] = None   # restrict to these engine keys; None = all
 
 
 @router.post("/api/competitors/web-search-scan")
@@ -999,6 +1005,7 @@ async def start_web_search_scan(req: WebSearchScanRequest):
                 product_limit=product_limit,
                 product_ids=req.product_ids,
                 force=req.force,
+                selected_engines=coerce_selected_engines(req.engines),
                 callbacks=[lambda e, d: manager.broadcast({"event": e, **d})],
             )
             await manager.broadcast({"event": "web_search_scan_complete", **result})
@@ -1025,6 +1032,7 @@ class ProductCompetitorSearchRequest(BaseModel):
     max_urls: int = 150
     num_fetchers: int = 4
     pause_after: int = 100
+    engines: Optional[List[str]] = None   # restrict to these engine keys; None = all
 
 
 class ParallelCompetitorSearchRequest(BaseModel):
@@ -1033,6 +1041,7 @@ class ParallelCompetitorSearchRequest(BaseModel):
     max_competitors: int = 10
     max_urls: int = 50
     product_ids: Optional[List[int]] = None  # None = all active products
+    engines: Optional[List[str]] = None   # restrict to these engine keys; None = all
 
 
 @router.post("/api/products/parallel-competitor-search")
@@ -1061,6 +1070,7 @@ async def start_parallel_competitor_search(req: ParallelCompetitorSearchRequest)
                 max_competitors=req.max_competitors,
                 max_urls=req.max_urls,
                 product_ids=req.product_ids,
+                selected_engines=coerce_selected_engines(req.engines),
                 callbacks=[lambda e, d: manager.broadcast({"event": e, **d})],
             )
             await manager.broadcast({"event": "parallel_search_complete", **result})
@@ -1115,6 +1125,7 @@ async def start_product_competitor_search(req: ProductCompetitorSearchRequest):
                 max_urls=max(50, min(300, req.max_urls)),
                 num_fetchers=max(1, min(8, req.num_fetchers)),
                 pause_after=max(10, req.pause_after),
+                selected_engines=coerce_selected_engines(req.engines),
                 callbacks=[_cb],
             )
             await manager.broadcast({"event": "product_competitor_search_complete", **result})
@@ -1644,6 +1655,246 @@ def db_health():
 
 
 # ---------------------------------------------------------------------------
+# Source sites — add / remove
+# ---------------------------------------------------------------------------
+
+class AddSourceSiteRequest(BaseModel):
+    name: str
+    domain: str
+    shopify_store_url: str
+    is_destination: bool = False
+
+
+@router.post("/api/source-sites")
+def add_source_site(req: AddSourceSiteRequest):
+    name = req.name.strip()
+    domain = req.domain.strip().lower().rstrip("/")
+    store_url = req.shopify_store_url.strip().rstrip("/")
+    if not name or not domain or not store_url:
+        raise HTTPException(status_code=422, detail="name, domain, and shopify_store_url are required")
+    sites = config.get("source_sites", default=[])
+    if any(s.get("domain") == domain for s in sites):
+        raise HTTPException(status_code=409, detail=f"A site with domain '{domain}' already exists")
+    if not store_url.startswith("http"):
+        store_url = "https://" + store_url
+    sites.append({
+        "name": name,
+        "domain": domain,
+        "base_url": f"https://{domain}",
+        "shopify_store_url": store_url,
+        "enabled": True,
+        "is_destination": req.is_destination,
+        "shopify_api_key": "",
+        "shopify_access_token": "",
+        "shopify_client_id": "",
+        "shopify_client_secret": "",
+        "sync_draft": False,
+        "sync_archived": False,
+    })
+    config._settings["source_sites"] = sites
+    config._save()
+    return {"status": "added", "domain": domain}
+
+
+@router.delete("/api/source-sites/{domain}")
+def remove_source_site(domain: str):
+    sites = config.get("source_sites", default=[])
+    new_sites = [s for s in sites if s.get("domain") != domain]
+    if len(new_sites) == len(sites):
+        raise HTTPException(status_code=404, detail=f"Source site not found: {domain}")
+    config._settings["source_sites"] = new_sites
+    config._save()
+    return {"status": "removed", "domain": domain}
+
+
+# ---------------------------------------------------------------------------
+# Source-site Shopify credentials
+# ---------------------------------------------------------------------------
+
+class ShopifyCredentialsRequest(BaseModel):
+    shopify_store_url: str = ""
+    shopify_client_id: str = ""       # formerly api_key; Client ID from Shopify app
+    shopify_client_secret: str = ""   # shpss_… prefix; used for webhook signature verification
+    shopify_access_token: str = ""    # shpat_… (custom app) or atkn_… (newer app automation token)
+    sync_draft: bool = False
+    sync_archived: bool = False
+
+
+@router.put("/api/source-sites/{domain}/credentials")
+def save_source_site_credentials(domain: str, req: ShopifyCredentialsRequest):
+    """Persist Shopify API credentials for a source site (matched by domain)."""
+    sites = config.get("source_sites", default=[])
+    matched = False
+    for site in sites:
+        if site.get("domain") == domain:
+            site["shopify_store_url"] = req.shopify_store_url.strip()
+            site["shopify_client_id"] = req.shopify_client_id.strip()
+            site["shopify_client_secret"] = req.shopify_client_secret.strip()
+            site["shopify_access_token"] = req.shopify_access_token.strip()
+            site["sync_draft"] = req.sync_draft
+            site["sync_archived"] = req.sync_archived
+            matched = True
+            break
+    if not matched:
+        raise HTTPException(status_code=404, detail=f"Source site not found: {domain}")
+    # Patch the list back into config and save
+    config._settings["source_sites"] = sites
+    config._save()
+    return {"status": "saved", "domain": domain}
+
+
+# domain -> {"token": str, "expires_at": float}
+_shopify_token_cache: Dict[str, Dict] = {}
+
+
+def _static_token(site: Dict) -> Optional[tuple]:
+    """Pre-issued Admin API token path.
+
+    In-admin custom apps (Settings → Develop apps) hand you a permanent Admin API
+    access token directly — no client_credentials exchange, and the store can't
+    refuse the install the way it does for Partner/Plus-org apps. If a site has
+    both a store URL and an access token configured, return (store_url, token) to
+    use verbatim; otherwise None so the caller falls through to the exchange.
+    """
+    store_url = (site.get("shopify_store_url") or "").strip()
+    token = (site.get("shopify_access_token") or "").strip()
+    if store_url and token:
+        return store_url, token
+    return None
+
+
+async def _get_site_credentials(domain: str):
+    """Return (store_url, access_token) for a domain.
+
+    Prefers a pre-issued Admin API access token if one is configured; otherwise
+    exchanges client_id + client_secret for a fresh token via client_credentials.
+    """
+    sites = config.get("source_sites", default=[])
+    site = next((s for s in sites if s.get("domain") == domain), None)
+    if site is None:
+        raise HTTPException(status_code=404, detail=f"Unknown source site: {domain}")
+
+    # Pre-issued token wins — it's static, never cached/exchanged, and works on
+    # stores where the client_credentials app can't be installed.
+    static = _static_token(site)
+    if static:
+        return static
+
+    store_url = (site.get("shopify_store_url") or "").strip()
+    client_id = (site.get("shopify_client_id") or "").strip()
+    client_secret = (site.get("shopify_client_secret") or "").strip()
+
+    if not store_url or not (client_id and client_secret):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Shopify credentials not configured for {domain}. "
+                   "Add Store URL plus either an Access Token, or a Client ID and "
+                   "Client Secret, in Settings.",
+        )
+
+    cached = _shopify_token_cache.get(domain, {})
+    # Refresh 5 minutes before expiry
+    if cached and cached.get("expires_at", 0) - time.time() > 300:
+        return store_url, cached["token"]
+
+    from backend.shopify.client import fetch_access_token, ShopifyError
+    try:
+        token = await fetch_access_token(store_url, client_id, client_secret)
+    except ShopifyError as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to obtain Shopify token for {domain}: {exc}")
+
+    _shopify_token_cache[domain] = {"token": token, "expires_at": time.time() + 86399}
+    return store_url, token
+
+
+@router.post("/api/source-sites/{domain}/test-connection")
+async def test_source_site_connection(domain: str):
+    """Verify Shopify credentials by exchanging client_id+secret for a token, then fetching shop info."""
+    from backend.shopify.client import ShopifyError
+    try:
+        store_url, token = await _get_site_credentials(domain)
+    except HTTPException as exc:
+        return {"ok": False, "error": exc.detail}
+    except ShopifyError as exc:
+        return {"ok": False, "error": f"Token exchange failed — {exc}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    import httpx
+    from backend.shopify.client import missing_scope
+    base = f"{store_url.rstrip('/')}/admin/api/2024-01"
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{base}/shop.json", headers=headers)
+            if resp.status_code != 200:
+                return {"ok": False, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+            shop = resp.json().get("shop", {})
+
+            # /shop.json needs no special scope, so it succeeds even when the app
+            # was never granted read_products — which makes Scan/Sync 403 later.
+            # Probe a product read so "Connected" actually means "can read products".
+            prod = await client.get(f"{base}/products.json", params={"limit": 1}, headers=headers)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    result = {"ok": True, "shop_name": shop.get("name", ""), "plan": shop.get("plan_name", "")}
+    if prod.status_code == 200:
+        result["products_ok"] = True
+        return result
+
+    result["products_ok"] = False
+    scope = missing_scope(prod.status_code, prod.text)
+    if scope:
+        result["missing_scope"] = scope
+        result["warning"] = (
+            f"Connected, but the app is missing the '{scope}' scope — Scan Now and "
+            f"Live Sync will fail until it's granted in Shopify Admin → Develop apps "
+            f"→ Admin API access scopes."
+        )
+    else:
+        result["warning"] = f"Connected, but product read failed: HTTP {prod.status_code}."
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Shopify connection log (Settings troubleshooting panel)
+# ---------------------------------------------------------------------------
+
+@router.get("/api/shopify/connection-log")
+def shopify_connection_log(n: int = 150):
+    """Recent Shopify store connection attempts (for the Settings troubleshooting panel)."""
+    from backend.shopify import connlog
+    return {"lines": connlog.get_lines(n)}
+
+
+@router.post("/api/shopify/connection-log/clear")
+def shopify_connection_log_clear():
+    from backend.shopify import connlog
+    connlog.clear()
+    return {"status": "cleared"}
+
+
+# ---------------------------------------------------------------------------
+# Live external-search activity log (Live Search Log panel)
+# ---------------------------------------------------------------------------
+
+@router.get("/api/search-log")
+def search_log(n: int = 200):
+    """Recent external product/competitor search activity: % match, search term,
+    websites queried, and results. Powers the Live Search Log panel."""
+    from backend.search import searchlog
+    return {"entries": searchlog.get_entries(n)}
+
+
+@router.post("/api/search-log/clear")
+def search_log_clear():
+    from backend.search import searchlog
+    searchlog.clear()
+    return {"status": "cleared"}
+
+
+# ---------------------------------------------------------------------------
 # Task Manager — active/recent task list
 # ---------------------------------------------------------------------------
 
@@ -1673,6 +1924,21 @@ def tail_log(lines: int = 8):
 # Web Search — Find This Product, Beat This Price, Find Me Customers
 # ---------------------------------------------------------------------------
 
+@router.get("/api/search/engines")
+def list_search_engines():
+    """Expose the search-engine registry and the per-page engine lists.
+
+    The frontend renders one checkbox per engine in `pages[<page>]`, labelled
+    from `engines`, so the selection UI stays in lockstep with what the backend
+    actually queries. `engines` is the full registry; `pages` maps each page key
+    (find_product, beat_price, competitors, products) to its engine keys.
+    """
+    return {
+        "engines": [dict(e) for e in SEARCH_ENGINES],
+        "pages": {page: list(keys) for page, keys in PAGE_ENGINES.items()},
+    }
+
+
 class FindProductRequest(BaseModel):
     product_ids: Optional[List[int]] = None
     query: Optional[str] = None
@@ -1681,6 +1947,7 @@ class FindProductRequest(BaseModel):
     max_results: int = 5
     min_fuzzy_score: int = 0          # 0 = no filter on competitor site results
     search_competitor_sites: bool = True
+    engines: Optional[List[str]] = None   # restrict to these engine keys; None = all
 
 
 @router.post("/api/search/find-product")
@@ -1742,6 +2009,7 @@ async def search_find_product(req: FindProductRequest, db: Session = Depends(get
         competitor_model_map=competitor_model_map or None,
         exclude_own_domains=own_domains,
         max_results=req.max_results,
+        selected_engines=coerce_selected_engines(req.engines),
     )
 
     if req.search_competitor_sites and competitor_domains:
@@ -1769,6 +2037,9 @@ async def search_find_product(req: FindProductRequest, db: Session = Depends(get
     db.add(search_rec)
     db.flush()
 
+    # FindProductResult.price is a Float column; shopping engines (e.g. Walmart,
+    # Google Shopping) return prices as display strings like "$104.90", so parse
+    # before persisting. The API response keeps the original string for display.
     for r in web_results:
         domain = r.get("domain", "")
         db.add(FindProductResult(
@@ -1778,7 +2049,7 @@ async def search_find_product(req: FindProductRequest, db: Session = Depends(get
             domain=domain,
             title=r.get("title"),
             description=r.get("description"),
-            price=r.get("price"),
+            price=_parse_price(r.get("price")),
             model_number=r.get("model_number"),
             image_url=r.get("image") or None,
             competitor_id=competitor_domain_map.get(domain),
@@ -1793,7 +2064,7 @@ async def search_find_product(req: FindProductRequest, db: Session = Depends(get
             domain=domain,
             title=r.get("title"),
             description=r.get("description"),
-            price=r.get("price"),
+            price=_parse_price(r.get("price")),
             model_number=r.get("model_number"),
             image_url=r.get("image") or None,
             fuzzy_score=r.get("fuzzy_score"),
@@ -1859,6 +2130,7 @@ class BeatPriceRequest(BaseModel):
     price_max: Optional[float] = None
     characteristics: Optional[Dict[str, Any]] = None
     max_results: int = 10
+    engines: Optional[List[str]] = None   # restrict to these engine keys; None = all
 
 
 def _parse_price(val) -> Optional[float]:
@@ -1934,6 +2206,7 @@ async def search_beat_price(req: BeatPriceRequest, db: Session = Depends(get_db_
                     characteristics=req.characteristics,
                     max_results=req.max_results,
                     pattern_queries=pattern_queries,
+                    selected_engines=coerce_selected_engines(req.engines),
                 )
             except Exception as exc:
                 groups.append({
@@ -1998,6 +2271,7 @@ async def search_beat_price(req: BeatPriceRequest, db: Session = Depends(get_db_
         characteristics=req.characteristics,
         max_results=req.max_results,
         pattern_queries=pattern_queries or None,
+        selected_engines=coerce_selected_engines(req.engines),
     )
     for r in results:
         r["price"] = _parse_price(r.get("price"))
