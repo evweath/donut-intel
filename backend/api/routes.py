@@ -288,6 +288,7 @@ def list_product_ids(
 class UpdateCanonicalRequest(BaseModel):
     canonical_title: Optional[str] = None
     canonical_description: Optional[str] = None
+    product_search_term: Optional[str] = None
     manufacturer: Optional[str] = None
     model_number: Optional[str] = None
     sku: Optional[str] = None
@@ -468,7 +469,9 @@ def _serialize_product(p: Product, full: bool = False) -> dict:
     ]
     comp_count = len([m for m in p.competitor_matches if m.is_active])
     result = {
-        "id": p.id, "title": p.canonical_title, "manufacturer": p.manufacturer,
+        "id": p.id, "title": p.canonical_title,
+        "product_search_term": p.product_search_term,
+        "manufacturer": p.manufacturer,
         "model_number": p.model_number, "sku": p.sku, "price": p.price_canonical,
         "price_min": p.price_min, "price_max": p.price_max, "category": p.category,
         "subcategory": p.subcategory, "ai_category": p.ai_category,
@@ -818,17 +821,30 @@ def bulk_delete_competitors(req: CompetitorBulkDeleteRequest, db: Session = Depe
 @router.get("/api/competitors")
 def list_competitors(
     page: int = 1, per_page: int = 50,
+    sort: Optional[str] = None, dir: str = "asc",
     db: Session = Depends(get_db_session)
 ):
-    """F14: List all tracked competitors with scan history."""
+    """F14: List all tracked competitors with scan history.
+
+    Sorting is applied across the entire result set (before pagination) so the
+    chosen order spans all pages, not just the current page.
+    """
     source_domains = {s["domain"] for s in config.get("source_sites", default=[])}
     query = db.query(Competitor).filter(
         Competitor.is_active == True,
         ~Competitor.domain.in_(source_domains),
     )
     total = query.count()
+    sort_columns = {
+        "domain": Competitor.domain,
+        "matches": Competitor.total_matching_products,
+        "session": Competitor.scan_session_name,
+        "last_scanned": Competitor.last_scanned_at,
+    }
+    order_col = sort_columns.get(sort, Competitor.domain)
+    order_by = order_col.desc() if dir == "desc" else order_col.asc()
     competitors = (
-        query.order_by(Competitor.domain)
+        query.order_by(order_by)
         .offset((page - 1) * per_page).limit(per_page).all()
     )
     now = datetime.utcnow()
@@ -1944,17 +1960,15 @@ class FindProductRequest(BaseModel):
     query: Optional[str] = None
     model_number: Optional[str] = None
     category: Optional[str] = None
-    max_results: int = 5
+    max_results: int = 10
     min_fuzzy_score: int = 0          # 0 = no filter on competitor site results
     search_competitor_sites: bool = True
     engines: Optional[List[str]] = None   # restrict to these engine keys; None = all
 
 
-@router.post("/api/search/find-product")
-async def search_find_product(req: FindProductRequest, db: Session = Depends(get_db_session)):
-    import asyncio as _asyncio
-    from backend.search.engine import find_products, search_competitor_websites
-
+def _find_product_context(req: "FindProductRequest", db: Session) -> dict:
+    """Resolve the search query and competitor maps for a find-product request.
+    Shared by the initial search and the "continue searching" follow-up."""
     parts: List[str] = []
     model_number: str = req.model_number or ''
     category: str = req.category or ''
@@ -1966,8 +1980,10 @@ async def search_find_product(req: FindProductRequest, db: Session = Depends(get
             .all()
         )
         for p in prods:
-            if p.canonical_title:
-                parts.append(p.canonical_title)
+            # Prefer the user-curated search term; fall back to the title.
+            term = (p.product_search_term or p.canonical_title or "").strip()
+            if term:
+                parts.append(term)
             if not model_number and p.model_number:
                 model_number = p.model_number
             if not category and p.category:
@@ -2001,6 +2017,39 @@ async def search_find_product(req: FindProductRequest, db: Session = Depends(get
                 competitor_model_map[d].add(mdl)
 
     own_domains = {s["domain"] for s in config.get("source_sites", default=[])}
+    return {
+        "product_name": product_name,
+        "model_number": model_number,
+        "category": category,
+        "competitor_model_map": competitor_model_map,
+        "competitor_domain_map": competitor_domain_map,
+        "competitor_domains": competitor_domains,
+        "own_domains": own_domains,
+    }
+
+
+@router.post("/api/search/find-product")
+async def search_find_product(req: FindProductRequest, db: Session = Depends(get_db_session)):
+    import asyncio as _asyncio
+    from backend.search.engine import find_products, search_competitor_websites
+
+    ctx = _find_product_context(req, db)
+    product_name = ctx["product_name"]
+    model_number = ctx["model_number"]
+    category = ctx["category"]
+    competitor_model_map = ctx["competitor_model_map"]
+    competitor_domain_map = ctx["competitor_domain_map"]
+    competitor_domains = ctx["competitor_domains"]
+    own_domains = ctx["own_domains"]
+
+    # Emit an immediate Live Search Log entry so the user sees the search start
+    # (term, engines, confidence) right away — the engine-result block only lands
+    # 30-60s later once the fetches finish.
+    from backend.search import searchlog as _searchlog
+    _engine_label = ", ".join(_searchlog.engine_names(req.engines) or ["all engines"])
+    _searchlog.record_note(
+        f'▶ find product: "{product_name}" — {req.min_fuzzy_score}% min match — {_engine_label}'
+    )
 
     web_coro = find_products(
         product_name=product_name,
@@ -2010,6 +2059,7 @@ async def search_find_product(req: FindProductRequest, db: Session = Depends(get
         exclude_own_domains=own_domains,
         max_results=req.max_results,
         selected_engines=coerce_selected_engines(req.engines),
+        match_pct=req.min_fuzzy_score,
     )
 
     if req.search_competitor_sites and competitor_domains:
@@ -2084,6 +2134,60 @@ async def search_find_product(req: FindProductRequest, db: Session = Depends(get
     }
 
 
+class FindProductContinueRequest(FindProductRequest):
+    search_id: int
+    exclude_domains: List[str] = []   # web competitors already shown; find new ones
+
+
+@router.post("/api/search/find-product/continue")
+async def search_find_product_continue(req: FindProductContinueRequest, db: Session = Depends(get_db_session)):
+    """Find ~max_results MORE web competitors for an existing find-product search,
+    excluding those already shown, and append them to the same saved search.
+    Only the web search re-runs (the competitor-site pass is a fixed set)."""
+    from backend.search.engine import find_products
+
+    search_rec = db.query(FindProductSearch).filter(FindProductSearch.id == req.search_id).first()
+    if not search_rec:
+        raise HTTPException(status_code=404, detail="Search not found")
+
+    ctx = _find_product_context(req, db)
+    competitor_domain_map = ctx["competitor_domain_map"]
+    exclude = {d for d in (req.exclude_domains or []) if d}
+
+    web_results = await find_products(
+        product_name=ctx["product_name"],
+        model_number=ctx["model_number"] or None,
+        category=ctx["category"] or None,
+        competitor_model_map=ctx["competitor_model_map"] or None,
+        exclude_own_domains=ctx["own_domains"],
+        max_results=req.max_results,
+        selected_engines=coerce_selected_engines(req.engines),
+        exclude_domains=exclude,
+    )
+
+    for r in web_results:
+        domain = r.get("domain", "")
+        db.add(FindProductResult(
+            search_id=search_rec.id,
+            result_type="web",
+            url=r.get("url"),
+            domain=domain,
+            title=r.get("title"),
+            description=r.get("description"),
+            price=_parse_price(r.get("price")),
+            model_number=r.get("model_number"),
+            image_url=r.get("image") or None,
+            competitor_id=competitor_domain_map.get(domain),
+        ))
+    db.commit()
+
+    return {
+        "search_id": search_rec.id,
+        "results": web_results,
+        "competitor_results": [],
+    }
+
+
 @router.get("/api/search/find-product/history")
 def find_product_history(limit: int = 20, db: Session = Depends(get_db_session)):
     searches = (
@@ -2092,17 +2196,34 @@ def find_product_history(limit: int = 20, db: Session = Depends(get_db_session))
         .limit(limit)
         .all()
     )
+    # "Our price" for a find-product search is the canonical price of the catalog
+    # product(s) it was run against. A result isn't tied to a single product, so we
+    # use the first selected product's price as the reference (null for free-text
+    # searches with no product selected).
+    search_pids = {}
+    for s in searches:
+        pids = json.loads(s.product_ids_json) if s.product_ids_json else []
+        search_pids[s.id] = pids
+    all_pids = {pid for pids in search_pids.values() for pid in pids}
+    price_by_pid = {}
+    if all_pids:
+        for p in db.query(Product).filter(Product.id.in_(all_pids)).all():
+            price_by_pid[p.id] = p.price_canonical
+
     out = []
     for s in searches:
+        pids = search_pids.get(s.id, [])
+        our_price = price_by_pid.get(pids[0]) if pids else None
         out.append({
             "id": s.id,
             "query": s.query,
             "model_number": s.model_number,
             "category": s.category,
-            "product_ids": json.loads(s.product_ids_json) if s.product_ids_json else [],
+            "product_ids": pids,
             "searched_at": s.searched_at.isoformat() if s.searched_at else None,
             "results": [
                 {
+                    "id": r.id,
                     "result_type": r.result_type,
                     "url": r.url,
                     "domain": r.domain,
@@ -2114,11 +2235,23 @@ def find_product_history(limit: int = 20, db: Session = Depends(get_db_session))
                     "fuzzy_score": r.fuzzy_score,
                     "source_query": r.source_query,
                     "competitor_id": r.competitor_id,
+                    "our_price": our_price,
                 }
                 for r in s.results
             ],
         })
     return {"searches": out}
+
+
+@router.delete("/api/search/find-product/result/{result_id}")
+def delete_find_product_result(result_id: int, db: Session = Depends(get_db_session)):
+    """Delete a single result row from a Find-Product search history entry."""
+    r = db.query(FindProductResult).filter(FindProductResult.id == result_id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Result not found")
+    db.delete(r)
+    db.commit()
+    return {"status": "deleted", "id": result_id}
 
 
 class BeatPriceRequest(BaseModel):
@@ -2131,6 +2264,7 @@ class BeatPriceRequest(BaseModel):
     characteristics: Optional[Dict[str, Any]] = None
     max_results: int = 10
     engines: Optional[List[str]] = None   # restrict to these engine keys; None = all
+    min_confidence: Optional[float] = None  # user-set minimum fuzzy-match % (default 30 floor)
 
 
 def _parse_price(val) -> Optional[float]:
@@ -2149,8 +2283,10 @@ def _parse_price(val) -> Optional[float]:
 
 def _build_beat_price_description(product: Product, extra: Optional[str]) -> str:
     parts = []
-    if product.canonical_title:
-        parts.append(product.canonical_title)
+    # Prefer the user-curated search term; fall back to the canonical title.
+    base_title = (product.product_search_term or product.canonical_title or '').strip()
+    if base_title:
+        parts.append(base_title)
     if product.manufacturer and product.manufacturer not in ' '.join(parts):
         parts.append(product.manufacturer)
     if product.model_number and product.model_number not in ' '.join(parts):
@@ -2160,26 +2296,22 @@ def _build_beat_price_description(product: Product, extra: Optional[str]) -> str
     return ' '.join(parts)
 
 
-@router.post("/api/search/beat-price")
-async def search_beat_price(req: BeatPriceRequest, db: Session = Depends(get_db_session)):
+async def _run_beat_price_search(req: "BeatPriceRequest", db: Session, search_rec: BeatPriceSearch,
+                                 exclude_domains: Optional[set] = None) -> dict:
+    """Core Beat-This-Price search, shared by the initial search and the
+    "continue searching" follow-up.
+
+    *exclude_domains* lists competitor domains already returned by an earlier
+    batch; passing it makes this run find only NEW competitors. When it is empty
+    (the initial search) the cached-DB fallback is used if the live search is
+    empty; on a continue run we skip that fallback so we never re-show cached
+    competitors as "new".
+    """
     from backend.search.engine import find_suppliers
     from backend.search.pattern_learner import generate_queries, get_active_patterns, record_pattern_results
 
-    if not req.description and not req.product_ids:
-        raise HTTPException(status_code=400, detail="Provide description or product_ids")
-
-    search_rec = BeatPriceSearch(
-        description=req.description,
-        model_number=req.model_number,
-        category=req.category,
-        price_min=req.price_min,
-        price_max=req.price_max,
-        characteristics_json=json.dumps(req.characteristics) if req.characteristics else None,
-        max_results=req.max_results,
-    )
-    db.add(search_rec)
-    db.flush()
-
+    exclude = exclude_domains or set()
+    is_continue = bool(exclude)
     active_pids = set(get_active_patterns(db))
 
     if req.product_ids:
@@ -2191,7 +2323,7 @@ async def search_beat_price(req: BeatPriceRequest, db: Session = Depends(get_db_
         groups = []
         for product in products:
             desc = _build_beat_price_description(product, req.description)
-            title_for_patterns = product.canonical_title or desc
+            title_for_patterns = product.product_search_term or product.canonical_title or desc
             pattern_queries = [
                 (pid, q) for pid, q in generate_queries(title_for_patterns)
                 if pid in active_pids
@@ -2207,6 +2339,8 @@ async def search_beat_price(req: BeatPriceRequest, db: Session = Depends(get_db_
                     max_results=req.max_results,
                     pattern_queries=pattern_queries,
                     selected_engines=coerce_selected_engines(req.engines),
+                    exclude_domains=exclude,
+                    min_confidence=req.min_confidence,
                 )
             except Exception as exc:
                 groups.append({
@@ -2218,9 +2352,9 @@ async def search_beat_price(req: BeatPriceRequest, db: Session = Depends(get_db_
 
             record_pattern_results(db, [pid for pid, _ in pattern_queries], per_pattern_best)
 
-            # Fallback to cached DB results when the live search comes up empty
-            # (rate-limiting, network outage, etc.)
-            if not results:
+            # Fallback to cached DB results when the initial live search comes up
+            # empty (rate-limiting, network outage, etc.). Skipped on continue runs.
+            if not results and not is_continue:
                 cached = (
                     db.query(BeatPriceResult)
                     .filter(BeatPriceResult.product_id == product.id)
@@ -2244,6 +2378,7 @@ async def search_beat_price(req: BeatPriceRequest, db: Session = Depends(get_db_
                         url=r.get("url"), domain=r.get("domain"), title=r.get("title"),
                         description=r.get("description"), price=_parse_price(r.get("price")),
                         model_number=r.get("model_number"), image_url=r.get("image") or None,
+                        fuzzy_score=r.get("fuzzy_score"),
                     ))
 
             for r in results:
@@ -2257,11 +2392,10 @@ async def search_beat_price(req: BeatPriceRequest, db: Session = Depends(get_db_
         db.commit()
         return {"search_id": search_rec.id, "results": [], "groups": groups}
 
-    # Free-text only path — apply patterns but skip learning (no canonical title)
-    pattern_queries = [
-        (pid, q) for pid, q in generate_queries(req.description or "")
-        if pid in active_pids
-    ]
+    # Free-text only path — search for EXACTLY what the user typed. No pattern
+    # decoration, no "buy ... supplier wholesale price" wrapper, no appended
+    # characteristics/price text. The query string sent to the engines must equal
+    # the user's input verbatim (see exact_query in find_suppliers).
     results, _ = await find_suppliers(
         description=req.description,
         model_number=req.model_number,
@@ -2270,8 +2404,11 @@ async def search_beat_price(req: BeatPriceRequest, db: Session = Depends(get_db_
         price_max=req.price_max,
         characteristics=req.characteristics,
         max_results=req.max_results,
-        pattern_queries=pattern_queries or None,
+        pattern_queries=[("full", req.description or "")],
+        exact_query=True,
         selected_engines=coerce_selected_engines(req.engines),
+        exclude_domains=exclude,
+        min_confidence=req.min_confidence,
     )
     for r in results:
         r["price"] = _parse_price(r.get("price"))
@@ -2280,9 +2417,45 @@ async def search_beat_price(req: BeatPriceRequest, db: Session = Depends(get_db_
             url=r.get("url"), domain=r.get("domain"), title=r.get("title"),
             description=r.get("description"), price=r["price"],
             model_number=r.get("model_number"), image_url=r.get("image") or None,
+            fuzzy_score=r.get("fuzzy_score"),
         ))
     db.commit()
     return {"search_id": search_rec.id, "results": results, "groups": []}
+
+
+@router.post("/api/search/beat-price")
+async def search_beat_price(req: BeatPriceRequest, db: Session = Depends(get_db_session)):
+    if not req.description and not req.product_ids:
+        raise HTTPException(status_code=400, detail="Provide description or product_ids")
+
+    search_rec = BeatPriceSearch(
+        description=req.description,
+        model_number=req.model_number,
+        category=req.category,
+        price_min=req.price_min,
+        price_max=req.price_max,
+        characteristics_json=json.dumps(req.characteristics) if req.characteristics else None,
+        max_results=req.max_results,
+    )
+    db.add(search_rec)
+    db.flush()
+    return await _run_beat_price_search(req, db, search_rec)
+
+
+class BeatPriceContinueRequest(BeatPriceRequest):
+    search_id: int
+    exclude_domains: List[str] = []   # competitors already shown; find new ones
+
+
+@router.post("/api/search/beat-price/continue")
+async def search_beat_price_continue(req: BeatPriceContinueRequest, db: Session = Depends(get_db_session)):
+    """Find ~max_results MORE competitors for an existing Beat-Price search,
+    excluding the ones already shown, and append them to the same saved search."""
+    search_rec = db.query(BeatPriceSearch).filter(BeatPriceSearch.id == req.search_id).first()
+    if not search_rec:
+        raise HTTPException(status_code=404, detail="Search not found")
+    exclude = {d for d in (req.exclude_domains or []) if d}
+    return await _run_beat_price_search(req, db, search_rec, exclude_domains=exclude)
 
 
 @router.get("/api/search/beat-price/history")
@@ -2293,6 +2466,13 @@ def beat_price_history(limit: int = 20, db: Session = Depends(get_db_session)):
         .limit(limit)
         .all()
     )
+    # Resolve "our price" for every result via its catalog product, in one query.
+    product_ids = {r.product_id for s in searches for r in s.results if r.product_id}
+    our_price_by_pid = {}
+    if product_ids:
+        for p in db.query(Product).filter(Product.id.in_(product_ids)).all():
+            our_price_by_pid[p.id] = p.price_canonical
+
     out = []
     for s in searches:
         out.append({
@@ -2306,12 +2486,26 @@ def beat_price_history(limit: int = 20, db: Session = Depends(get_db_session)):
             "searched_at": s.searched_at.isoformat() if s.searched_at else None,
             "results": [
                 {
+                    "id": r.id,
                     "url": r.url, "domain": r.domain, "title": r.title,
                     "description": r.description, "price": r.price,
                     "model_number": r.model_number, "image_url": r.image_url,
+                    "fuzzy_score": r.fuzzy_score,
+                    "our_price": our_price_by_pid.get(r.product_id),
                 }
                 for r in s.results
             ],
         })
     return {"searches": out}
+
+
+@router.delete("/api/search/beat-price/result/{result_id}")
+def delete_beat_price_result(result_id: int, db: Session = Depends(get_db_session)):
+    """Delete a single result row from a Beat-Price search history entry."""
+    r = db.query(BeatPriceResult).filter(BeatPriceResult.id == result_id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Result not found")
+    db.delete(r)
+    db.commit()
+    return {"status": "deleted", "id": result_id}
 

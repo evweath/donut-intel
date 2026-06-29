@@ -51,7 +51,7 @@ function app() {
     filterOptions: { manufacturers: [], categories: [], source_sites: [] },
     loadingProducts: false,
     productSelected: {},          // { product_id: true/false }
-    productCompMax: 5,
+    productCompMax: 10,
     productCompRunning: false,
     productCompIsParallel: false,           // true when using parallel endpoint (2+ products)
     productCompProgress: null,    // { product_title, found, max, phase, current_domain }
@@ -59,6 +59,12 @@ function app() {
     productCompSearchProducts: [],          // [{id, title, price, primary_image}] — products being searched
     productCompCounts: {},                  // {product_id: {found, target, done, searching, current_domain}}
     productCompPauseState: null,            // {product_id, product_title, found, visited, max} when paused
+
+    // Shared search-pause prompt (used by every search page). When set, the
+    // global pause modal shows. kind routes Continue/Stop to the right handler.
+    pausePrompt: null,                      // { kind:'comp'|'beat'|'find', found, max, product_title }
+    pauseTimer: null,                       // setInterval handle for the countdown
+    pauseRemaining: 0,                      // seconds left before auto-stop
     productCompNetworkError: false,         // true if the search completed with 0 found AND the internet was unreachable
     priceComparison: null,
     priceHistory: null,
@@ -84,19 +90,32 @@ function app() {
     findProductIds: [],
     findProductCatalogSearch: '',
     findProductCatalogResults: [],
-    findProductMaxResults: 5,
+    findProductMaxResults: 10,
     findProductResults: [],
     findProductCompResults: [],
     findProductLoading: false,
     findProductSearched: false,
     findProductHistory: [],
     findProductHistoryOpen: false,
+    fpHistorySort: { col: '', dir: 'asc' },   // sort for the flat find-product history table
+    bpHistorySort: { col: '', dir: 'asc' },   // sort for the flat beat-price history table
+    fpHistoryLimit: 50,                        // grows by 50 via "Show next 50"
+    bpHistoryLimit: 50,
+    // Batch-boundary pause state (find 10, ask to continue). Pause only kicks in
+    // when the user kept the default target (<=10); a larger target runs straight.
+    findProductTarget: 10,
+    findProductPauseEnabled: false,
+    findProductLastPayload: null,
+    findProductSearchId: null,
+    findProductAbort: null,
+    findProductActiveParams: null,   // {term, engines[], confidence} shown while searching
 
     // Beat This Price
-    beatPriceForm: { description: '', price_min: '', price_max: '', max_results: 10 },
+    beatPriceForm: { description: '', price_min: '', price_max: '', confidence: '', max_results: 10 },
     beatPriceChars: { size: '', color: '', manufacturer: '', country_of_origin: '', features: '' },
     beatPriceResults: [],            // Flat list when free-text only
     beatPriceGroupedResults: [],     // Per-product groups when products selected
+    beatPriceSort: { col: 'price', dir: 'asc' },  // shared sort for results; cheapest-first default
     beatPriceLoading: false,
     beatPriceProductIds: [],         // IDs of selected master products
     beatPriceCatalogSearch: '',
@@ -104,6 +123,12 @@ function app() {
     beatPriceProgress: '',           // Status text while running multi-product
     beatPriceHistory: [],
     beatPriceHistoryOpen: false,
+    // Batch-boundary pause state (see find-product equivalents above).
+    beatPriceTarget: 10,
+    beatPricePauseEnabled: false,
+    beatPriceLastPayload: null,
+    beatPriceSearchId: null,
+    beatPriceAbort: null,
 
     taskList: [],
 
@@ -129,6 +154,7 @@ function app() {
     competitorProfileSaving: false,
     productSort: { col: '', dir: 'asc' },
     competitorSort: { col: '', dir: 'asc' },
+    matchSort: { col: '', dir: 'asc' },
     competitorCols: ['domain', 'matches', 'session', 'last_scanned'],
     competitorDragFrom: null,
     competitorScanCriteria: {
@@ -419,6 +445,35 @@ function app() {
     },
 
     // -----------------------------------------------------------------------
+    // Product search term — editable, auto-saved on change. All internet
+    // searches query this field, so we persist edits immediately (no Save
+    // button) and flush any in-flight save before a search runs.
+    // -----------------------------------------------------------------------
+    _searchTermSaves: [],
+
+    async saveProductSearchTerm(p) {
+      if (!p || !p.id) return;
+      const value = (p.product_search_term || '').trim();
+      const promise = this.api(`/api/products/${p.id}/canonical`, {
+        method: 'PUT',
+        body: JSON.stringify({ product_search_term: value }),
+      })
+        .then(() => { this.toast('Search term saved', 'success', 1500); })
+        .catch(e => { this.toast('Failed to save search term: ' + e.message, 'error'); });
+      this._searchTermSaves.push(promise);
+      try { await promise; } finally {
+        this._searchTermSaves = this._searchTermSaves.filter(x => x !== promise);
+      }
+    },
+
+    // Await any pending search-term saves so a search uses the latest text.
+    async flushSearchTermSaves() {
+      if (this._searchTermSaves.length) {
+        await Promise.allSettled(this._searchTermSaves);
+      }
+    },
+
+    // -----------------------------------------------------------------------
     // Search-engine selection — checkboxes that narrow which engines/shopping
     // sites a page's search algorithm queries. The list is server-driven
     // (/api/search/engines) so it never drifts from what the backend runs.
@@ -468,6 +523,13 @@ function app() {
 
     anyEngineChecked(page) {
       return this.selectedEngines(page).length > 0;
+    },
+
+    // Human-readable labels for the engines currently checked on a page.
+    selectedEngineLabels(page) {
+      const all = this.enginesForPage(page) || [];
+      const labelOf = (k) => (all.find(e => e.key === k) || {}).label || k;
+      return this.selectedEngines(page).map(labelOf);
     },
 
     allEnginesChecked(page) {
@@ -539,12 +601,15 @@ function app() {
       if (!ids.length) { this.toast('Select at least one product', 'warning'); return; }
       if (this.productCompRunning) return;
 
+      // Persist any in-flight search-term edits so the scan uses the latest text.
+      await this.flushSearchTermSaves();
+
       const target = Math.max(1, parseInt(this.productCompMax) || 5);
 
       // Switch to search-mode view showing only the selected products
       this.productCompSearchProducts = (this.productData.products || [])
         .filter(p => ids.includes(p.id))
-        .map(p => ({ id: p.id, title: p.title || p.canonical_title, price: p.price, primary_image: p.primary_image }));
+        .map(p => ({ id: p.id, title: p.title || p.canonical_title, product_search_term: p.product_search_term, price: p.price, primary_image: p.primary_image }));
       this.productCompCounts = {};
       for (const p of this.productCompSearchProducts) {
         this.productCompCounts[p.id] = { found: 0, target, done: false, searching: false, current_domain: null };
@@ -609,6 +674,46 @@ function app() {
       } catch (e) {
         this.toast('Stop failed: ' + e.message, 'error');
       }
+    },
+
+    // ---- Shared search-pause prompt (Continue / Stop + 2-min auto-stop) ----
+    // PAUSE_SECONDS mirrors the backend PAUSE_TIMEOUT_SECONDS safety timeout.
+    showPausePrompt(kind, data) {
+      this.pausePrompt = { kind, ...(data || {}) };
+      this.pauseRemaining = 120;
+      this._clearPauseTimer();
+      this.pauseTimer = setInterval(() => {
+        this.pauseRemaining -= 1;
+        if (this.pauseRemaining <= 0) this.pauseStop();   // no response -> stop & store
+      }, 1000);
+    },
+
+    _clearPauseTimer() {
+      if (this.pauseTimer) { clearInterval(this.pauseTimer); this.pauseTimer = null; }
+    },
+
+    pauseCountdownText() {
+      const s = Math.max(0, this.pauseRemaining | 0);
+      const m = Math.floor(s / 60);
+      return m + ':' + String(s % 60).padStart(2, '0');
+    },
+
+    pauseContinue() {
+      const kind = this.pausePrompt?.kind;
+      this._clearPauseTimer();
+      this.pausePrompt = null;
+      if (kind === 'comp') this.resumeCompSearch();
+      else if (kind === 'beat') this.continueBeatPrice();
+      else if (kind === 'find') this.continueFindProduct();
+    },
+
+    pauseStop() {
+      const kind = this.pausePrompt?.kind;
+      this._clearPauseTimer();
+      this.pausePrompt = null;
+      if (kind === 'comp') this.stopCompSearch();
+      else if (kind === 'beat') this.stopBeatPrice();
+      else if (kind === 'find') this.stopFindProduct();
     },
 
     clearProductSelection() {
@@ -808,29 +913,87 @@ function app() {
         this.toast('Enter a query or select products from the catalog', 'info');
         return;
       }
+      // Persist any in-flight search-term edits so the search uses the latest text.
+      await this.flushSearchTermSaves();
       this.findProductLoading = true;
       this.findProductSearched = false;
       this.findProductResults = [];
       this.findProductCompResults = [];
+      const target = this.findProductMaxResults;
+      const payload = {
+        product_ids: this.findProductIds.length ? this.findProductIds : null,
+        query: this.findProductQuery || null,
+        model_number: this.findProductModelNumber || null,
+        category: this.findProductCategory || null,
+        max_results: target,
+        min_fuzzy_score: this.findProductMinFuzzyScore || 0,
+        search_competitor_sites: true,
+        engines: this.selectedEngines('find_product'),
+      };
+      this.findProductLastPayload = payload;
+      // Snapshot the search parameters shown in the "Searching..." window.
+      this.findProductActiveParams = {
+        term: this.findProductQuery
+          ? this.findProductQuery
+          : (this.findProductIds.length + ' selected product' + (this.findProductIds.length !== 1 ? 's' : '')),
+        engines: this.selectedEngineLabels('find_product'),
+        confidence: this.findProductMinFuzzyScore || 0,
+      };
+      this.findProductTarget = target;
+      this.findProductPauseEnabled = target <= 10;
+      this.findProductSearchId = null;
+      this.findProductAbort = new AbortController();
       try {
         const res = await this.api('/api/search/find-product', {
-          method: 'POST',
-          body: JSON.stringify({
-            product_ids: this.findProductIds.length ? this.findProductIds : null,
-            query: this.findProductQuery || null,
-            model_number: this.findProductModelNumber || null,
-            category: this.findProductCategory || null,
-            max_results: this.findProductMaxResults,
-            min_fuzzy_score: this.findProductMinFuzzyScore || 0,
-            search_competitor_sites: true,
-            engines: this.selectedEngines('find_product'),
-          }),
+          method: 'POST', body: JSON.stringify(payload), signal: this.findProductAbort.signal,
         });
+        this.findProductSearchId = res?.search_id || null;
         this.findProductResults = res?.results || [];
         this.findProductCompResults = res?.competitor_results || [];
         await this.loadFindProductHistory();
-      } catch (e) { this.toast('Search failed: ' + e.message, 'error'); }
-      finally { this.findProductLoading = false; this.findProductSearched = true; }
+        this._maybePauseFindProduct();
+      } catch (e) {
+        if (e.name !== 'AbortError') this.toast('Search failed: ' + e.message, 'error');
+      }
+      finally { this.findProductLoading = false; this.findProductSearched = true; this.findProductAbort = null; }
+    },
+
+    // Distinct web competitor domains found so far.
+    findProductDomains() {
+      const set = new Set();
+      (this.findProductResults || []).forEach(r => r.domain && set.add(r.domain));
+      return set;
+    },
+
+    _maybePauseFindProduct() {
+      const found = this.findProductDomains().size;
+      if (this.findProductPauseEnabled && this.findProductSearchId && found >= this.findProductTarget) {
+        this.showPausePrompt('find', { found });
+      }
+    },
+
+    async continueFindProduct() {
+      if (!this.findProductSearchId || !this.findProductLastPayload) return;
+      this.findProductTarget += 10;
+      this.findProductLoading = true;
+      this.findProductAbort = new AbortController();
+      const exclude = [...this.findProductDomains()];
+      try {
+        const res = await this.api('/api/search/find-product/continue', {
+          method: 'POST', signal: this.findProductAbort.signal,
+          body: JSON.stringify({ ...this.findProductLastPayload, search_id: this.findProductSearchId, exclude_domains: exclude }),
+        });
+        this.findProductResults = [...this.findProductResults, ...(res?.results || [])];
+        await this.loadFindProductHistory();
+        this._maybePauseFindProduct();
+      } catch (e) {
+        if (e.name !== 'AbortError') this.toast('Continue failed: ' + e.message, 'error');
+      } finally { this.findProductLoading = false; this.findProductAbort = null; }
+    },
+
+    stopFindProduct() {
+      if (this.findProductAbort) { try { this.findProductAbort.abort(); } catch {} }
+      this.findProductLoading = false;
     },
 
     // -----------------------------------------------------------------------
@@ -859,7 +1022,7 @@ function app() {
       this.beatPriceProductIds = [];
       this.beatPriceResults = [];
       this.beatPriceGroupedResults = [];
-      this.beatPriceForm = { description: '', price_min: '', price_max: '', max_results: 10 };
+      this.beatPriceForm = { description: '', price_min: '', price_max: '', confidence: '', max_results: 10 };
       this.beatPriceChars = {};
       this.beatPriceCatalogSearch = '';
       this.beatPriceCatalogResults = [];
@@ -872,6 +1035,8 @@ function app() {
         this.toast('Select at least one product or enter a description', 'info');
         return;
       }
+      // Persist any in-flight search-term edits so the search uses the latest text.
+      await this.flushSearchTermSaves();
 
       this.beatPriceLoading = true;
       this.beatPriceResults = [];
@@ -879,30 +1044,112 @@ function app() {
       this.beatPriceProgress = hasProducts ? `Searching ${this.beatPriceProductIds.length} product(s)...` : '';
 
       const chars = Object.fromEntries(Object.entries(this.beatPriceChars).filter(([, v]) => v));
+      const target = this.beatPriceForm.max_results || 10;
       const payload = {
         description: this.beatPriceForm.description || null,
         product_ids: hasProducts ? this.beatPriceProductIds : null,
         price_min: this.beatPriceForm.price_min ? parseFloat(this.beatPriceForm.price_min) : null,
         price_max: this.beatPriceForm.price_max ? parseFloat(this.beatPriceForm.price_max) : null,
+        min_confidence: this.beatPriceForm.confidence !== '' && this.beatPriceForm.confidence != null
+          ? parseFloat(this.beatPriceForm.confidence) : null,
         characteristics: Object.keys(chars).length ? chars : null,
-        max_results: this.beatPriceForm.max_results || 10,
+        max_results: target,
         engines: this.selectedEngines('beat_price'),
       };
+      this.beatPriceLastPayload = payload;
+      this.beatPriceTarget = target;
+      this.beatPricePauseEnabled = target <= 10;  // default-target safety net only
+      this.beatPriceSearchId = null;
+      this.beatPriceAbort = new AbortController();
 
       try {
-        const res = await this.api('/api/search/beat-price', { method: 'POST', body: JSON.stringify(payload) });
-        this.beatPriceResults = res?.results || [];
-        this.beatPriceGroupedResults = res?.groups || [];
-        const total = this.beatPriceResults.length + (res?.groups || []).reduce((n, g) => n + (g.results?.length || 0), 0);
+        const res = await this.api('/api/search/beat-price', {
+          method: 'POST', body: JSON.stringify(payload), signal: this.beatPriceAbort.signal,
+        });
+        this.beatPriceSearchId = res?.search_id || null;
+        const stamp = this._beatRunStamp(payload);
+        this.beatPriceResults = this._tagBeatResults(res?.results || [], stamp);
+        this.beatPriceGroupedResults = (res?.groups || []).map(g =>
+          ({ ...g, results: this._tagBeatResults(g.results || [], stamp) }));
+        const total = this.beatPriceTotalResults();
         if (!total) this.toast('No suppliers found — try broadening the description', 'info');
         else this.toast(`${total} supplier result${total !== 1 ? 's' : ''} found`, 'success');
+        this._maybePauseBeatPrice();
       } catch (e) {
-        this.toast('Search failed: ' + e.message, 'error');
+        if (e.name !== 'AbortError') this.toast('Search failed: ' + e.message, 'error');
       } finally {
         this.beatPriceLoading = false;
         this.beatPriceProgress = '';
+        this.beatPriceAbort = null;
         await this.loadBeatPriceHistory();
       }
+    },
+
+    // Distinct competitor domains found so far across flat + grouped results.
+    beatPriceDomains() {
+      const set = new Set();
+      (this.beatPriceResults || []).forEach(r => r.domain && set.add(r.domain));
+      (this.beatPriceGroupedResults || []).forEach(g =>
+        (g.results || []).forEach(r => r.domain && set.add(r.domain)));
+      return set;
+    },
+
+    beatPriceTotalResults() {
+      return (this.beatPriceResults || []).length +
+        (this.beatPriceGroupedResults || []).reduce((n, g) => n + (g.results?.length || 0), 0);
+    },
+
+    // If we hit the target (10) and pausing is on, ask whether to keep going.
+    _maybePauseBeatPrice() {
+      const found = this.beatPriceDomains().size;
+      if (this.beatPricePauseEnabled && this.beatPriceSearchId && found >= this.beatPriceTarget) {
+        this.showPausePrompt('beat', { found });
+      }
+    },
+
+    // "Continue" — fetch ~10 more competitors, excluding those already shown,
+    // and append them to the same saved search.
+    async continueBeatPrice() {
+      if (!this.beatPriceSearchId || !this.beatPriceLastPayload) return;
+      this.beatPriceTarget += 10;
+      this.beatPriceLoading = true;
+      this.beatPriceProgress = 'Searching for more competitors...';
+      this.beatPriceAbort = new AbortController();
+      const exclude = [...this.beatPriceDomains()];
+      try {
+        const res = await this.api('/api/search/beat-price/continue', {
+          method: 'POST', signal: this.beatPriceAbort.signal,
+          body: JSON.stringify({ ...this.beatPriceLastPayload, search_id: this.beatPriceSearchId, exclude_domains: exclude }),
+        });
+        const stamp = this._beatRunStamp(this.beatPriceLastPayload);
+        this.beatPriceResults = [...this.beatPriceResults, ...this._tagBeatResults(res?.results || [], stamp)];
+        this._mergeBeatGroups((res?.groups || []).map(g =>
+          ({ ...g, results: this._tagBeatResults(g.results || [], stamp) })));
+        this._maybePauseBeatPrice();   // ask again at the next 10
+      } catch (e) {
+        if (e.name !== 'AbortError') this.toast('Continue failed: ' + e.message, 'error');
+      } finally {
+        this.beatPriceLoading = false;
+        this.beatPriceProgress = '';
+        this.beatPriceAbort = null;
+        await this.loadBeatPriceHistory();
+      }
+    },
+
+    _mergeBeatGroups(newGroups) {
+      for (const ng of newGroups) {
+        const g = this.beatPriceGroupedResults.find(x => x.product_id === ng.product_id);
+        if (g) g.results = [...(g.results || []), ...(ng.results || [])];
+        else this.beatPriceGroupedResults.push(ng);
+      }
+      this.beatPriceGroupedResults = [...this.beatPriceGroupedResults];
+    },
+
+    // "Stop" — keep whatever has been found (already saved server-side).
+    stopBeatPrice() {
+      if (this.beatPriceAbort) { try { this.beatPriceAbort.abort(); } catch {} }
+      this.beatPriceLoading = false;
+      this.beatPriceProgress = '';
     },
 
     async loadBeatPriceHistory() {
@@ -910,6 +1157,96 @@ function app() {
         const res = await this.api('/api/search/beat-price/history?limit=20');
         this.beatPriceHistory = res?.searches || [];
       } catch {}
+    },
+
+    // Build a {ts, params} stamp describing the search that produced a result
+    // batch, so each result line can show when it was run and with what params.
+    _beatRunStamp(payload) {
+      const p = payload || {};
+      const parts = [];
+      if (p.description) parts.push(`"${p.description}"`);
+      if (p.price_min != null) parts.push(`min $${p.price_min}`);
+      if (p.price_max != null) parts.push(`max $${p.price_max}`);
+      if (p.min_confidence != null) parts.push(`conf ≥ ${p.min_confidence}%`);
+      return { ts: new Date().toLocaleString(), params: parts.join(' · ') || '—' };
+    },
+    // Attach the run stamp to each result row (kept on the row so it survives
+    // sorting and "continue" appends).
+    _tagBeatResults(rows, stamp) {
+      return (rows || []).map(r => ({ ...r, _ts: stamp.ts, _params: stamp.params }));
+    },
+    // Sort a result list using the shared sort helper. Default cheapest-first.
+    // Sortable columns: price, confidence (fuzzy_score), vendor (domain).
+    sortedBeatResults(rows) {
+      return this._sortRows(rows || [], this.beatPriceSort.col, this.beatPriceSort.dir, (r, col) => {
+        if (col === 'price') return r.price != null ? Number(r.price) : null;
+        if (col === 'confidence') return r.fuzzy_score != null ? Number(r.fuzzy_score) : null;
+        if (col === 'vendor') return r.domain || '';
+        return '';
+      });
+    },
+    setBeatSort(col) { this.setSort(this.beatPriceSort, col); },
+
+    // History list excluding searches that returned 0 results.
+    beatPriceHistoryVisible() {
+      return (this.beatPriceHistory || []).filter(s => (s.results?.length || 0) > 0);
+    },
+
+    // Find-Product history, excluding searches that returned 0 results.
+    findProductHistoryVisible() {
+      return (this.findProductHistory || []).filter(s => (s.results?.length || 0) > 0);
+    },
+
+    // Max result lines shown across the whole (flattened) search history.
+    HISTORY_ROW_LIMIT: 50,
+
+    // Shared accessor for sorting history result lines by the columns shown:
+    // searched date, vendor (domain), match % (fuzzy_score), our price, competitor price.
+    _historyResultVal(r, col) {
+      if (col === 'date') return r._searched_at ? (Date.parse(r._searched_at) || null) : null;
+      if (col === 'vendor') return r.domain || r.title || '';
+      if (col === 'match') return r.fuzzy_score != null ? Number(r.fuzzy_score) : null;
+      if (col === 'our') return r.our_price != null ? Number(r.our_price) : null;
+      if (col === 'price') return r.price != null ? Number(r.price) : null;
+      return '';
+    },
+    // Flatten every result line across all (non-empty) searches into one list,
+    // tagged with its search's query + timestamp. Keep only the most-recent
+    // `limit` lines, then apply the user's chosen column sort.
+    // Default (no column chosen) = newest-first.
+    historyFlatRows(searches, sortState, limit) {
+      const rows = [];
+      for (const s of (searches || [])) {
+        const query = s.query ?? s.description ?? '';
+        for (const r of (s.results || [])) {
+          rows.push({ ...r, _query: query, _searched_at: s.searched_at });
+        }
+      }
+      // Newest first (by search time, then result id), then cap to the limit.
+      rows.sort((a, b) =>
+        ((Date.parse(b._searched_at) || 0) - (Date.parse(a._searched_at) || 0)) ||
+        ((b.id || 0) - (a.id || 0)));
+      const pool = rows.slice(0, limit || this.HISTORY_ROW_LIMIT);
+      if (!sortState.col) return pool;
+      return this._sortRows(pool, sortState.col, sortState.dir,
+        (r, col) => this._historyResultVal(r, col));
+    },
+    // Total result lines available across the visible history (for "showing X of Y").
+    historyTotalRows(searches) {
+      return (searches || []).reduce((n, s) => n + (s.results?.length || 0), 0);
+    },
+
+    async deleteFindProductResult(resultId) {
+      try {
+        await this.api(`/api/search/find-product/result/${resultId}`, { method: 'DELETE' });
+        await this.loadFindProductHistory();
+      } catch (e) { this.toast('Delete failed: ' + e.message, 'error'); }
+    },
+    async deleteBeatPriceResult(resultId) {
+      try {
+        await this.api(`/api/search/beat-price/result/${resultId}`, { method: 'DELETE' });
+        await this.loadBeatPriceHistory();
+      } catch (e) { this.toast('Delete failed: ' + e.message, 'error'); }
     },
 
     // -----------------------------------------------------------------------
@@ -931,7 +1268,9 @@ function app() {
     async loadCompetitors(page = 1) {
       try {
         this.competitorPage = page;
-        this.competitors = await this.api(`/api/competitors?page=${page}&per_page=50`) || { competitors: [], total: 0 };
+        const s = this.competitorSort;
+        const sortQ = s.col ? `&sort=${encodeURIComponent(s.col)}&dir=${s.dir}` : '';
+        this.competitors = await this.api(`/api/competitors?page=${page}&per_page=50${sortQ}`) || { competitors: [], total: 0 };
       } catch (e) { this.toast('Failed to load competitors: ' + e.message, 'error'); }
     },
 
@@ -1099,6 +1438,7 @@ function app() {
       if (state.col === col) state.dir = state.dir === 'asc' ? 'desc' : 'asc';
       else { state.col = col; state.dir = 'asc'; }
       if (state === this.productSort) this.loadProducts(1);
+      if (state === this.competitorSort) this.loadCompetitors(1);
     },
     sortIcon(state, col) {
       if (state.col !== col) return '⇅';
@@ -1109,12 +1449,20 @@ function app() {
       return this.productData?.products || [];
     },
     sortedCompetitors() {
-      const rows = this.competitors?.competitors || [];
-      return this._sortRows(rows, this.competitorSort.col, this.competitorSort.dir, (c, col) => {
-        if (col === 'domain') return c.domain || '';
-        if (col === 'matches') return c.total_matching_products || 0;
-        if (col === 'session') return c.scan_session_name || '';
-        if (col === 'last_scanned') return c.last_scanned_at || '';
+      // Sort is server-side (applied across all pages); return current page data as-is.
+      return this.competitors?.competitors || [];
+    },
+    sortedMatches() {
+      const rows = (this.competitorDetail && this.competitorDetail.matches) || [];
+      return this._sortRows(rows, this.matchSort.col, this.matchSort.dir, (m, col) => {
+        if (col === 'title') return m.master_title || m.title || '';
+        if (col === 'manufacturer') return m.master_manufacturer || '';
+        if (col === 'price') return m.price != null ? Number(m.price) : null;
+        if (col === 'confidence') return m.confidence != null ? Number(m.confidence) : null;
+        if (col === 'variance') {
+          if (m.price == null || m.our_price == null || !m.our_price) return null;
+          return (Number(m.price) - Number(m.our_price)) / Number(m.our_price);
+        }
         return '';
       });
     },
@@ -1134,10 +1482,9 @@ function app() {
       this.competitorDragFrom = null;
     },
 
+    // Single-competitor delete — no confirmation popup (per product spec).
     deleteCompetitor(id) {
-      this.competitorSelected = [id];
-      this.competitorDeleteExclude = false;
-      this.competitorDeleteModal = true;
+      this._runDeleteCompetitors([id], false);
     },
 
     toggleCompetitorSelect(id) {
@@ -1150,33 +1497,71 @@ function app() {
       return this.competitorSelected.includes(id);
     },
 
-    selectAllCompetitors() {
+    // Selection persists across pages (competitorSelected is never reset on page
+    // load), so these helpers reason about the CURRENT page only.
+    allCurrentPageSelected() {
       const all = (this.competitors?.competitors || []).map(c => c.id);
-      this.competitorSelected = this.competitorSelected.length === all.length ? [] : [...all];
+      return all.length > 0 && all.every(id => this.competitorSelected.includes(id));
     },
 
-    openBulkDeleteModal() {
+    someCurrentPageSelected() {
+      const all = (this.competitors?.competitors || []).map(c => c.id);
+      return all.some(id => this.competitorSelected.includes(id)) && !this.allCurrentPageSelected();
+    },
+
+    selectAllCompetitors() {
+      const all = (this.competitors?.competitors || []).map(c => c.id);
+      if (this.allCurrentPageSelected()) {
+        // Deselect just this page; keep selections made on other pages.
+        this.competitorSelected = this.competitorSelected.filter(id => !all.includes(id));
+      } else {
+        const set = new Set(this.competitorSelected);
+        all.forEach(id => set.add(id));
+        this.competitorSelected = [...set];
+      }
+    },
+
+    // Toolbar "Delete Selected": confirm only when 2+ are selected.
+    requestBulkDelete() {
+      const n = this.competitorSelected.length;
+      if (!n) return;
+      if (n === 1) {
+        this._runDeleteCompetitors([...this.competitorSelected], this.competitorDeleteExclude);
+        return;
+      }
       this.competitorDeleteExclude = false;
       this.competitorDeleteModal = true;
     },
 
+    // "No" in the bulk-delete popup — close it but keep the current selection
+    // (and current page) intact so the user can adjust their choice.
+    cancelBulkDelete() {
+      this.competitorDeleteModal = false;
+    },
+
+    // "Yes" in the bulk-delete popup.
     async confirmDeleteCompetitors() {
-      const ids = [...this.competitorSelected];
+      this.competitorDeleteModal = false;
+      await this._runDeleteCompetitors([...this.competitorSelected], this.competitorDeleteExclude);
+    },
+
+    async _runDeleteCompetitors(ids, exclude) {
       if (!ids.length) return;
       try {
         const r = await this.api('/api/competitors/bulk-delete', {
           method: 'POST',
-          body: JSON.stringify({ ids, exclude: this.competitorDeleteExclude }),
+          body: JSON.stringify({ ids, exclude: !!exclude }),
         });
         const rm = r?.removed || {};
         const n = ids.length;
         const detail = `matches=${rm.matches || 0}, prices=${rm.price_history || 0}, scans=${rm.scans || 0}`;
         this.toast(`${n} competitor${n !== 1 ? 's' : ''} deleted (${detail})`, 'success');
-        this.competitorSelected = [];
-        this.competitorDeleteModal = false;
+        // Drop only the deleted IDs from the selection; keep any others checked.
+        this.competitorSelected = this.competitorSelected.filter(id => !ids.includes(id));
         this.competitorEditId = null;
         this.competitorDetail = null;
-        await this.loadCompetitors();
+        // Stay on the current page rather than reverting to page 1.
+        await this.loadCompetitors(this.competitorPage);
         this.loadStats();
       } catch (e) { this.toast('Failed to delete: ' + e.message, 'error'); }
     },
@@ -1745,6 +2130,7 @@ function app() {
           break;
         case 'product_comp_search_pause':
           this.productCompPauseState = msg;
+          this.showPausePrompt('comp', msg);
           break;
         case 'product_competitor_search_complete':
         case 'product_competitor_search_error':
@@ -1755,6 +2141,8 @@ function app() {
           this.productCompIsParallel = false;
           this.productCompProgress = null;
           this.productCompPauseState = null;
+          this._clearPauseTimer();
+          this.pausePrompt = null;
           // Surface a network banner when the search finished with nothing found
           // because the internet was unreachable (vs. genuinely no competitors).
           this.productCompNetworkError = msg.network_ok === false;

@@ -21,26 +21,29 @@ async def find_products(
     exclude_own_domains: Optional[set] = None,
     max_results: int = 5,
     selected_engines: Optional[set] = None,
+    exclude_domains: Optional[set] = None,
+    match_pct: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Search the web for products using multiple targeted queries.
+    Search the web for a product using the search term EXACTLY as given.
 
-    Runs three independent searches — buy <name>, buy <model>, buy <category> —
-    plus Google Shopping for each, then merges by engine-agreement score.
+    The query is `product_name` verbatim — no "buy" prefix, no model/category
+    variants, no other decoration. The caller passes the user-curated product
+    search term, and the user controls the entire query through it.
 
     competitor_model_map: {domain: {model_numbers already tracked}} — a competitor
     domain is excluded only when the specific model_number being searched is already
     present in its tracked set. Pass None to exclude no competitors.
 
     selected_engines: set of engine keys the user narrowed the search to, or None
-    for all engines. Each query variant's engine list is intersected with this set;
-    the Google Shopping passes run only when 'shopping' is selected.
+    for all engines. The Google Shopping pass runs only when 'shopping' is selected.
     """
     own = exclude_own_domains or set()
+    already_found = exclude_domains or set()   # competitors from a prior batch (continue)
     shopping_on = selected_engines is None or 'shopping' in selected_engines
 
     def _should_exclude(domain: str) -> bool:
-        if domain in own:
+        if domain in own or domain in already_found:
             return True
         if model_number and competitor_model_map:
             tracked = competitor_model_map.get(domain, set())
@@ -48,49 +51,37 @@ async def find_products(
                 return True
         return False
 
-    # Build per-query tasks: text + shopping search for each query variant. Each
-    # variant's organic engines plus the non-Google shopping surfaces are narrowed
-    # by the user's selection; an empty narrowed list skips that query. Google
-    # Shopping rides its own higher-volume call, gated on 'shopping' being selected.
+    # Single query — the product search term used VERBATIM. No prefix/suffix and
+    # no model/category variants: every search uses exactly the given text.
+    query = product_name
+    from backend.search import searchlog
+    _pct = f" ({round(match_pct)}% match)" if match_pct is not None else ""
     search_tasks: List[Any] = []
-    name_engines = narrow_engines(
+    term_engines = narrow_engines(
         ['ddg', 'bing', 'google', 'yahoo', *NON_GOOGLE_SHOPPING], selected_engines)
-    if name_engines:
+    if term_engines:
         search_tasks.append(multi_engine_search(
-            f"buy {product_name}", max_results=max_results * 4,
-            engines=name_engines, log_label="find product",
+            query, max_results=max_results * 4,
+            engines=term_engines, log_label="find product", match_pct=match_pct,
         ))
     if shopping_on:
-        search_tasks.append(_google_shopping_search(f"buy {product_name}", max_results=max_results * 3))
+        # Google Shopping runs outside multi_engine_search, so log its progress here
+        # too (it is the slowest of the result sources and the one users watch for).
+        async def _logged_shopping():
+            name = searchlog.engine_names(['shopping'])[0]
+            searchlog.record_note(f'searching {name} for "{query}"{_pct}')
+            res = await _google_shopping_search(query, max_results=max_results * 3)
+            searchlog.record_note(f'{name}: {len(res or [])} found')
+            return res
 
-    if model_number:
-        model_engines = narrow_engines(
-            ['bing', 'google', 'yahoo', *NON_GOOGLE_SHOPPING], selected_engines)
-        if model_engines:
-            search_tasks.append(multi_engine_search(
-                f"buy {product_name} {model_number}", max_results=max_results * 3,
-                engines=model_engines, log_label="find product",
-            ))
-        if shopping_on:
-            search_tasks.append(_google_shopping_search(f"buy {model_number}", max_results=max_results * 2))
+        search_tasks.append(_logged_shopping())
 
-    if category:
-        cat_engines = narrow_engines(
-            ['ddg', 'bing', 'google', 'yahoo', *NON_GOOGLE_SHOPPING], selected_engines)
-        if cat_engines:
-            search_tasks.append(multi_engine_search(
-                f"buy {category}", max_results=max_results * 3,
-                engines=cat_engines, log_label="find product",
-            ))
-        if shopping_on:
-            search_tasks.append(_google_shopping_search(f"buy {category}", max_results=max_results * 2))
-
-    img_query = f"buy {product_name}"
     all_raw, images = await asyncio.gather(
         asyncio.gather(*search_tasks, return_exceptions=True),
-        _image_search(img_query, max_results=max_results * 2),
+        _image_search(query, max_results=max_results * 2),
     )
     img_idx = _img_index(images) if isinstance(images, list) else {}
 
     pre_enrich = _aggregate_and_rank(all_raw, img_idx, max_results, exclude_fn=_should_exclude)
+    searchlog.record_note(f'found {len(pre_enrich)} web products — fetching prices…')
     return await _enrich_prices(pre_enrich)

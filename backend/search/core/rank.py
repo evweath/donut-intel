@@ -84,29 +84,45 @@ async def multi_engine_search(
     exclude = exclude_domains or set()
     fetch = max_results * 3  # over-fetch to account for filtering
 
+    from backend.search import searchlog
+    _pct = f" ({round(match_pct)}% match)" if match_pct is not None else ""
+
+    async def _logged(engine_key: str, coro):
+        """Emit a live-log line as this engine starts and finishes, so the user
+        sees the search is still running and how many hits each engine returned."""
+        name = searchlog.engine_names([engine_key])[0]
+        searchlog.record_note(f'searching {name} for "{query}"{_pct}')
+        try:
+            res = await coro
+        except Exception:
+            searchlog.record_note(f'{name}: no response')
+            raise
+        searchlog.record_note(f'{name}: {len(res or [])} found')
+        return res
+
     # Build tasks; track which indices are shopping sources.
     tasks: List = []
     shopping_indices: List[int] = []
     if 'ddg' in engines:
-        tasks.append(_text_search(query, max_results=fetch))
+        tasks.append(_logged('ddg', _text_search(query, max_results=fetch)))
     if 'bing' in engines:
-        tasks.append(_bing_search(query, max_results=fetch))
+        tasks.append(_logged('bing', _bing_search(query, max_results=fetch)))
     if 'google' in engines:
-        tasks.append(_google_search(query, max_results=fetch))
+        tasks.append(_logged('google', _google_search(query, max_results=fetch)))
     if 'yahoo' in engines:
-        tasks.append(_yahoo_search(query, max_results=fetch))
+        tasks.append(_logged('yahoo', _yahoo_search(query, max_results=fetch)))
     if 'shopping' in engines:
         shopping_indices.append(len(tasks))
-        tasks.append(_google_shopping_search(query, max_results=fetch))
+        tasks.append(_logged('shopping', _google_shopping_search(query, max_results=fetch)))
     if 'bing_shopping' in engines:
         shopping_indices.append(len(tasks))
-        tasks.append(_bing_shopping_search(query, max_results=fetch))
+        tasks.append(_logged('bing_shopping', _bing_shopping_search(query, max_results=fetch)))
     if 'yahoo_shopping' in engines:
         shopping_indices.append(len(tasks))
-        tasks.append(_yahoo_shopping_search(query, max_results=fetch))
+        tasks.append(_logged('yahoo_shopping', _yahoo_shopping_search(query, max_results=fetch)))
     if 'ddg_shopping' in engines:
         shopping_indices.append(len(tasks))
-        tasks.append(_duckduckgo_shopping_search(query, max_results=fetch))
+        tasks.append(_logged('ddg_shopping', _duckduckgo_shopping_search(query, max_results=fetch)))
 
     raw = await asyncio.gather(*tasks, return_exceptions=True)
 

@@ -58,6 +58,10 @@ class Product(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     canonical_title = Column(String(500), nullable=False)
     canonical_description = Column(Text)
+    # User-editable query used when searching the web for this product. Defaults
+    # to the combined titles scraped from each store; the user can refine it to
+    # catch competitors that the raw title misses. All internet searches use this.
+    product_search_term = Column(Text)
     manufacturer = Column(String(255))
     model_number = Column(String(255))
     sku = Column(String(255))
@@ -499,6 +503,7 @@ class BeatPriceResult(Base):
     price = Column(Float)
     model_number = Column(String(255))
     image_url = Column(Text)
+    fuzzy_score = Column(Integer)            # match % vs the searched product (0-100)
     created_at = Column(DateTime, default=func.now())
 
     search = relationship("BeatPriceSearch", back_populates="results")

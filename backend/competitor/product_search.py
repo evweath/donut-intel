@@ -44,6 +44,10 @@ _comp_search_control: Dict[str, Any] = {
     'resume_event': None,  # asyncio.Event, set by resume or stop signal
 }
 
+# How long a pause prompt waits for the user before auto-stopping the search
+# and storing whatever has been found so far (seconds).
+PAUSE_TIMEOUT_SECONDS = 120
+
 
 def resume_product_comp_search() -> bool:
     ev = _comp_search_control.get('resume_event')
@@ -178,7 +182,8 @@ def _build_query(product: Any, override: Optional[str]) -> str:
     if override:
         return override
 
-    title_raw = product.canonical_title or ''
+    # Prefer the user-curated search term as the query basis; fall back to title.
+    title_raw = (getattr(product, 'product_search_term', None) or product.canonical_title or '')
     cleaned_title = _clean_title_for_search(title_raw)
     mfg = (product.manufacturer or '').strip()
     model = product.model_number
@@ -254,6 +259,7 @@ class _P:
     def __init__(self, s: dict) -> None:
         self.__dict__.update(s)
         self.canonical_title = s['title']
+        self.product_search_term = s.get('search_term')
         self.price_canonical = s['price']
 
 
@@ -261,6 +267,7 @@ def _snapshot_product(p: Product) -> dict:
     return {
         'id': p.id,
         'title': p.canonical_title,
+        'search_term': p.product_search_term,
         'manufacturer': p.manufacturer,
         'model_number': p.model_number,
         'sku': p.sku,
@@ -298,6 +305,7 @@ async def _process_one_product(
     num_fetchers: int = 4,
     pause_after: int = 100,
     enable_pause: bool = False,
+    pause_at_target: bool = False,
     emit: Callable = None,
     search_query_override: Optional[str] = None,
     log_prefix: str = '[PROD-SEARCH]',
@@ -511,12 +519,48 @@ async def _process_one_product(
         logger.info('%s    Checking %d prior competitor URLs', log_prefix, len(prior_items))
         await asyncio.gather(*[_process_url(r) for r in prior_items], return_exceptions=True)
 
+    # Emit a pause prompt and wait (up to PAUSE_TIMEOUT_SECONDS) for the user to
+    # choose continue or stop. Returns True to keep searching, False to stop.
+    # No response within the timeout is treated as "stop" so a search left
+    # unattended finishes and stores its results instead of hanging forever.
+    async def _pause_and_wait(reason: str) -> bool:
+        resume_ev = asyncio.Event()
+        _comp_search_control['resume_event'] = resume_ev
+        await emit('product_comp_search_pause', {
+            'product_id': snap['id'], 'product_title': snap['title'],
+            'reason': reason,
+            'found': found_count, 'visited': len(visited_domains),
+            'max': max_competitors,
+            'timeout': PAUSE_TIMEOUT_SECONDS,
+        })
+        try:
+            await asyncio.wait_for(resume_ev.wait(), timeout=PAUSE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            logger.info('%s    Pause prompt timed out — auto-stopping', log_prefix)
+            _comp_search_control['stopped'] = True
+        _comp_search_control['resume_event'] = None
+        return not _comp_search_control['stopped']
+
     # ------------------------------------------------------------------ #
     # Main round loop — keeps going until target met or all rounds done   #
     # ------------------------------------------------------------------ #
-    for round_idx, (round_query, round_engines) in enumerate(rounds):
-        if found_count >= max_competitors or _comp_search_control['stopped']:
+    round_idx = 0
+    while round_idx < len(rounds):
+        if _comp_search_control['stopped']:
             break
+
+        # Target reached. If the user explicitly asked for more than the default
+        # (pause_at_target is False), just stop here. Otherwise pause and ask
+        # whether to search for 10 more.
+        if found_count >= max_competitors:
+            if not (enable_pause and pause_at_target):
+                break
+            if not await _pause_and_wait('target_reached'):
+                break
+            max_competitors += 10  # user chose to keep searching
+
+        round_query, round_engines = rounds[round_idx]
+        round_idx += 1
 
         await emit('product_comp_search_progress', {
             'product_id': snap['id'], 'product_title': snap['title'],
@@ -544,7 +588,7 @@ async def _process_one_product(
                 all_seen_urls.add(url)
                 new_items.append(r)
 
-        logger.info('%s    Round %d %r: %d new URLs', log_prefix, round_idx + 1, round_query[:40], len(new_items))
+        logger.info('%s    Round %d %r: %d new URLs', log_prefix, round_idx, round_query[:40], len(new_items))
 
         if not new_items:
             continue
@@ -554,21 +598,13 @@ async def _process_one_product(
 
         total_visited = len(visited_domains)
 
-        if found_count >= max_competitors or _comp_search_control['stopped']:
+        if _comp_search_control['stopped']:
             break
 
         # After every pause_after unique domains visited, check in with the user
         if enable_pause and total_visited >= last_pause_at + pause_after and found_count < max_competitors:
             last_pause_at = total_visited
-            resume_ev = asyncio.Event()
-            _comp_search_control['resume_event'] = resume_ev
-            await emit('product_comp_search_pause', {
-                'product_id': snap['id'], 'product_title': snap['title'],
-                'found': found_count, 'visited': total_visited, 'max': max_competitors,
-            })
-            await resume_ev.wait()
-            _comp_search_control['resume_event'] = None
-            if _comp_search_control['stopped']:
+            if not await _pause_and_wait('sites_visited'):
                 break
             # User said continue — resume the round loop
 
@@ -631,6 +667,11 @@ async def run_product_competitor_search(
         'max_competitors': max_competitors,
     })
 
+    # When the user hasn't asked for more than the default 10 competitors, pause
+    # at the target and ask whether to keep going (saves search tokens). If they
+    # explicitly requested more, run straight to that target with no prompt.
+    pause_at_target = max_competitors <= 10
+
     for snap in snaps:
         if _comp_search_control['stopped']:
             break
@@ -643,6 +684,7 @@ async def run_product_competitor_search(
             num_fetchers=num_fetchers,
             pause_after=pause_after,
             enable_pause=True,
+            pause_at_target=pause_at_target,
             emit=emit,
             search_query_override=search_query,
             selected_engines=selected_engines,

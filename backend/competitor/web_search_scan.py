@@ -109,6 +109,21 @@ def _build_query(product: Product) -> str:
     # Treat generic/placeholder manufacturer values as absent
     if mfr.lower() in _GENERIC_MANUFACTURERS:
         mfr = ''
+
+    # When a user-curated search term exists it leads the query — the editable
+    # field's whole purpose is to catch competitors a narrow model/SKU query
+    # misses. Still cleaned so the default (combined store titles) stays usable.
+    search_term = (getattr(product, 'product_search_term', '') or '').strip()
+    if search_term:
+        cleaned = _clean_title_for_search(search_term)
+        term_parts: List[str] = []
+        if mfr and mfr.lower() not in cleaned.lower():
+            term_parts.append(mfr)
+        if cleaned:
+            term_parts.append(cleaned)
+        term_parts.append('buy')
+        return ' '.join(' '.join(term_parts).split())
+
     # Prefer model_number (quoted for precision); fall back to SKU (unquoted —
     # SKUs with multiple hyphens don't index well as exact phrases); then title.
     if mfr and product.model_number:
@@ -282,6 +297,7 @@ async def run_web_search_scan(
             {
                 'id': p.id,
                 'title': p.canonical_title,
+                'search_term': p.product_search_term,
                 'manufacturer': p.manufacturer,
                 'model_number': p.model_number,
                 'sku': p.sku,
@@ -332,6 +348,7 @@ async def run_web_search_scan(
             def __init__(self, s: dict):
                 self.id = s['id']
                 self.canonical_title = s['title']
+                self.product_search_term = s.get('search_term')
                 self.manufacturer = s['manufacturer']
                 self.model_number = s['model_number']
                 self.sku = s['sku']

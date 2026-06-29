@@ -408,6 +408,8 @@ class SourceScraper:
                 product = Product(
                     canonical_title=scraped.title,
                     canonical_description=scraped.description,
+                    # Default web-search query = the scraped store title; user-editable.
+                    product_search_term=scraped.title,
                     manufacturer=scraped.manufacturer,
                     model_number=scraped.model_number,
                     sku=scraped.sku,

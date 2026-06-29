@@ -56,6 +56,8 @@ _MIGRATIONS = [
     ("competitors", "excluded_from_search", "BOOLEAN DEFAULT 0"),
     ("competitors", "is_manufacturer", "BOOLEAN DEFAULT 0"),
     ("competitors", "is_category_only", "BOOLEAN DEFAULT 0"),
+    ("products", "product_search_term", "TEXT"),
+    ("beat_price_results", "fuzzy_score", "INTEGER"),
 ]
 
 
@@ -71,6 +73,40 @@ def _run_migrations(engine: Engine) -> None:
                 pass  # Column already exists — normal on subsequent startups
 
 
+def _backfill_product_search_term() -> None:
+    """Populate product_search_term for products that don't have one yet.
+
+    Default = the distinct titles scraped from each store, combined (so the
+    search query reflects every store's wording), falling back to the canonical
+    title when a product has no source listings. Runs once per product: products
+    with a non-empty term (including user edits) are left untouched.
+    """
+    from backend.database.models import Product
+
+    with session_scope() as session:
+        products = (
+            session.query(Product)
+            .filter((Product.product_search_term.is_(None)) | (Product.product_search_term == ""))
+            .all()
+        )
+        if not products:
+            return
+        filled = 0
+        for p in products:
+            titles: list = []
+            seen: set = set()
+            for s in p.sources:
+                t = (s.source_title or "").strip()
+                if t and t.lower() not in seen:
+                    seen.add(t.lower())
+                    titles.append(t)
+            combined = " ".join(titles) if titles else (p.canonical_title or "")
+            if combined:
+                p.product_search_term = combined
+                filled += 1
+        logger.info("Backfilled product_search_term for %d products", filled)
+
+
 def init_db() -> Engine:
     """Initialize DB: create engine, tables, return engine."""
     global _engine, _SessionLocal
@@ -78,6 +114,7 @@ def init_db() -> Engine:
     _SessionLocal = sessionmaker(bind=_engine, autocommit=False, autoflush=False)
     Base.metadata.create_all(_engine)
     _run_migrations(_engine)
+    _backfill_product_search_term()
     logger.info("Database initialized")
     return _engine
 

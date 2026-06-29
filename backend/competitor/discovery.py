@@ -68,7 +68,7 @@ async def discover_competitors(
         if len(found) >= max_results:
             break
         try:
-            hits = await multi_engine_search(query, max_results=15)
+            hits = await multi_engine_search(query, max_results=15, log_label="competitor discovery")
 
             for item in hits:
                 if len(found) >= max_results:

@@ -33,6 +33,9 @@ async def find_suppliers(
     max_results: int = 10,
     pattern_queries: Optional[List[Tuple[str, str]]] = None,
     selected_engines: Optional[set] = None,
+    exclude_domains: Optional[set] = None,
+    exact_query: bool = False,
+    min_confidence: Optional[float] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """
     Find alternate suppliers using pattern-based title queries.
@@ -49,6 +52,7 @@ async def find_suppliers(
     """
     char_parts: List[str] = [str(v) for v in (characteristics or {}).values() if v]
     price_hint = f"under ${price_max:.0f}" if price_max else (f"over ${price_min:.0f}" if price_min else '')
+    exclude = exclude_domains or set()   # competitors already found (for "continue")
 
     if not pattern_queries:
         pattern_queries = [("full", description)]
@@ -72,9 +76,15 @@ async def find_suppliers(
 
     if pattern_engines:
         for pid, query in pattern_queries:
-            base = ' '.join(filter(None, [query] + char_parts + [price_hint]))
+            if exact_query:
+                # Free-text path: send the user's input verbatim — no wrapper words,
+                # no appended characteristics/price text. See routes free-text path.
+                search_query = query
+            else:
+                base = ' '.join(filter(None, [query] + char_parts + [price_hint]))
+                search_query = f"buy {base} supplier wholesale price"
             all_tasks.append(multi_engine_search(
-                f"buy {base} supplier wholesale price", max_results=max_results * 2,
+                search_query, max_results=max_results * 2,
                 engines=pattern_engines,
                 match_pct=30, log_label="beat price",
             ))
@@ -116,12 +126,14 @@ async def find_suppliers(
     per_pattern_best: Dict[str, int] = {pid: 0 for pid, _ in pattern_queries}
 
     def _score_and_merge(result: Dict, pid: str) -> None:
+        domain = result['domain']
+        if domain in exclude:   # skip competitors already returned by a prior batch
+            return
         score = fuzzy_score(result.get('title', ''), result.get('description', ''), description)
         result['fuzzy_score'] = score
         result['pattern_id'] = pid
         if score > per_pattern_best.get(pid, 0):
             per_pattern_best[pid] = score
-        domain = result['domain']
         if domain not in domain_best or score > domain_best[domain].get('fuzzy_score', 0):
             # When the new winner has no price but the previous entry did, carry the price over.
             existing_price = (domain_best.get(domain) or {}).get('price')
@@ -145,8 +157,9 @@ async def find_suppliers(
     # Sort by fuzzy score descending.  Apply the 30% floor only when enough
     # results clear it; otherwise fall back to the top-N by score so the user
     # always sees something rather than an empty list.
+    floor = min_confidence if min_confidence is not None else 30
     ranked = sorted(domain_best.values(), key=lambda r: -(r.get('fuzzy_score') or 0))
-    above_threshold = [r for r in ranked if (r.get('fuzzy_score') or 0) >= 30]
+    above_threshold = [r for r in ranked if (r.get('fuzzy_score') or 0) >= floor]
     pool = above_threshold if len(above_threshold) >= 3 else ranked
     results = await _enrich_prices(pool[:max_results])
     return results, per_pattern_best

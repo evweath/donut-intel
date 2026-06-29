@@ -23,12 +23,19 @@ _FETCH_RETRIES = 3
 _FETCH_BACKOFF_BASE = 0.4  # seconds: 0.4, 0.8
 
 
-async def _curl_get(url: str, extra_headers: Optional[List[str]] = None, timeout: int = 15) -> str:
+async def _curl_get(url: str, extra_headers: Optional[List[str]] = None, timeout: int = 15,
+                    retries: int = _FETCH_RETRIES) -> str:
     """Fetch a URL via primp browser impersonation — same TLS fingerprinting as curl, but URL stays
     in-process memory and is not visible in the process table (ps/top).
 
     Retries transient connection failures a few times before giving up (returns '').
     HTTP error *statuses* return their body normally — only thrown exceptions retry.
+
+    ``retries`` caps the number of attempts. The default (3) suits the main search
+    engines, where an egress blip otherwise yields a misleading "0 found". Callers
+    that probe many URLs and can tolerate a miss (e.g. competitor-site pattern
+    probing across hundreds of domains) should pass ``retries=1`` to avoid paying
+    3× the latency on every dead/timing-out URL.
     """
     import primp
     headers = {
@@ -39,17 +46,18 @@ async def _curl_get(url: str, extra_headers: Optional[List[str]] = None, timeout
         if ': ' in h:
             k, v = h.split(': ', 1)
             headers[k] = v
+    retries = max(1, retries)
     last_exc: Optional[BaseException] = None
-    for attempt in range(_FETCH_RETRIES):
+    for attempt in range(retries):
         try:
             async with primp.AsyncClient(impersonate='random', timeout=timeout) as client:
                 r = await asyncio.wait_for(client.get(url, headers=headers), timeout + 2)
                 return r.text
         except Exception as exc:
             last_exc = exc
-            if attempt + 1 < _FETCH_RETRIES:
+            if attempt + 1 < retries:
                 await asyncio.sleep(_FETCH_BACKOFF_BASE * (2 ** attempt))
-    logger.debug("primp_get failed for %s after %d attempts: %s", url, _FETCH_RETRIES, last_exc)
+    logger.debug("primp_get failed for %s after %d attempts: %s", url, retries, last_exc)
     return ''
 
 

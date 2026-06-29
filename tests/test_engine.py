@@ -209,3 +209,104 @@ async def test_find_suppliers_returns_results_when_shopping_has_prices():
         f'No results have a price field. Results: {results}. '
         'Shopping results with prices should flow through to the final list.'
     )
+
+
+# ---------------------------------------------------------------------------
+# Beat This Price — free-text "describe what you need" query is verbatim
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_find_suppliers_exact_query_is_verbatim():
+    """
+    The free-text "Or describe what you need" path must search for EXACTLY what
+    the user typed — no 'buy ... supplier wholesale price' wrapper, no appended
+    characteristics or price text. When exact_query=True the query string passed
+    to multi_engine_search must equal the user's input verbatim.
+    """
+    typed = 'commercial donut fryer natural gas 24-count'
+    captured_queries = []
+
+    async def fake_multi_engine_search(query, max_results=10, engines=None, **kwargs):
+        captured_queries.append(query)
+        return []
+
+    with patch('backend.search.pages.beat_price.multi_engine_search', side_effect=fake_multi_engine_search), \
+         patch('backend.search.pages.beat_price._google_shopping_search', new_callable=AsyncMock, return_value=[]), \
+         patch('backend.search.pages.beat_price._image_search', new_callable=AsyncMock, return_value=[]):
+        await find_suppliers(
+            description=typed,
+            pattern_queries=[('full', typed)],
+            exact_query=True,
+            price_max=500,                         # must NOT leak into the query
+            characteristics={'color': 'red'},      # must NOT leak into the query
+            max_results=5,
+        )
+
+    assert captured_queries, 'no multi_engine_search calls made'
+    assert all(q == typed for q in captured_queries), (
+        f'exact_query path altered the search string: {captured_queries!r}. '
+        'It must be the verbatim user input with nothing prepended or appended.'
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_suppliers_default_query_keeps_wrapper():
+    """The catalog/product path (exact_query=False, default) still wraps the
+    query with 'buy ... supplier wholesale price' — verbatim behavior is opt-in."""
+    captured_queries = []
+
+    async def fake_multi_engine_search(query, max_results=10, engines=None, **kwargs):
+        captured_queries.append(query)
+        return []
+
+    with patch('backend.search.pages.beat_price.multi_engine_search', side_effect=fake_multi_engine_search), \
+         patch('backend.search.pages.beat_price._google_shopping_search', new_callable=AsyncMock, return_value=[]), \
+         patch('backend.search.pages.beat_price._image_search', new_callable=AsyncMock, return_value=[]):
+        await find_suppliers(description='Acme Widget', max_results=5)
+
+    assert captured_queries and all(
+        q.startswith('buy ') and 'supplier wholesale price' in q for q in captured_queries
+    ), f'default path should keep the wrapper, got {captured_queries!r}'
+
+
+# ---------------------------------------------------------------------------
+# Beat This Price — user-set minimum confidence floor
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_find_suppliers_min_confidence_filters_low_scores():
+    """
+    A user-supplied min_confidence raises the fuzzy-match floor. Results scoring
+    below it are dropped (as long as enough results clear the bar that the
+    never-empty fallback doesn't kick in).
+    """
+    # Four exact-title matches (high fuzzy) + one vague title (low fuzzy).
+    target = 'Acme Widget Model X100'
+    strong = [
+        {
+            'url': f'https://store{i}.com/w', 'domain': f'store{i}.com',
+            'title': target, 'description': target, 'price': f'${40 + i}.00',
+            'source': 'shopping',
+        } for i in range(1, 5)
+    ]
+    weak = [{
+        'url': 'https://vague.com/w', 'domain': 'vague.com',
+        'title': 'random unrelated thing', 'description': 'nothing alike',
+        'price': '$9.00', 'source': 'shopping',
+    }]
+
+    async def fake_multi_engine_search(query, max_results=10, engines=None, **kwargs):
+        return strong + weak
+
+    with patch('backend.search.pages.beat_price.multi_engine_search', side_effect=fake_multi_engine_search), \
+         patch('backend.search.pages.beat_price._google_shopping_search', new_callable=AsyncMock, return_value=[]), \
+         patch('backend.search.pages.beat_price._image_search', new_callable=AsyncMock, return_value=[]):
+        results, _ = await find_suppliers(
+            description=target, max_results=10, min_confidence=80,
+        )
+
+    domains = {r['domain'] for r in results}
+    assert 'vague.com' not in domains, (
+        f'low-confidence result survived min_confidence=80 floor: {domains}'
+    )
+    assert any(d.startswith('store') for d in domains), 'strong matches were dropped'

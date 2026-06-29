@@ -90,6 +90,34 @@
       </template>
     </div>
 
+    <!-- ===== GLOBAL SEARCH PAUSE MODAL (shared by every search page) ===== -->
+    <div x-show="pausePrompt" x-cloak
+      class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
+      <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4">
+        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Keep searching?</h3>
+        <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">
+          Found <span class="font-semibold" x-text="pausePrompt?.found"></span>
+          competitor<span x-show="pausePrompt?.found !== 1">s</span> so far<span
+            x-show="pausePrompt?.product_title" x-text="' for ' + (pausePrompt?.product_title || '').slice(0, 50)"></span>.
+          Do you want to continue searching?
+        </p>
+        <p class="text-xs text-gray-400 mb-4">
+          Auto-stops in <span class="font-semibold tabular-nums" x-text="pauseCountdownText()"></span>
+          if you don't respond — results found so far are saved.
+        </p>
+        <div class="flex gap-3">
+          <button @click="pauseContinue()"
+            class="flex-1 bg-orange-500 hover:bg-orange-600 text-white font-semibold py-2 rounded-lg text-sm transition">
+            Continue
+          </button>
+          <button @click="pauseStop()"
+            class="flex-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-semibold py-2 rounded-lg text-sm transition">
+            Stop
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- ===== LIVE SEARCH LOG (top of every page that runs external searches) ===== -->
     <div x-show="onSearchLogPage()"
          class="sticky top-0 z-30 px-6 pt-3 pb-2 bg-gray-100/85 dark:bg-gray-900/85 backdrop-blur-sm border-b border-gray-200 dark:border-gray-800">
@@ -425,6 +453,12 @@
                 <div class="flex-1 min-w-0">
                   <div class="font-medium text-sm line-clamp-2" x-text="p.title"></div>
                   <div x-show="p.price" class="text-xs text-green-600 font-semibold mt-0.5" x-text="'$' + (p.price || 0).toFixed(2)"></div>
+                  <div class="flex items-center gap-1 mt-1">
+                    <span class="text-[10px] text-gray-400 flex-shrink-0" title="Web-search term — auto-saved">🔎</span>
+                    <input type="text" x-model="p.product_search_term" @change="saveProductSearchTerm(p)"
+                      placeholder="search term…" title="Web-search term for this product (auto-saved)"
+                      class="w-full text-xs border rounded px-1.5 py-0.5 bg-white dark:bg-gray-700 dark:border-gray-600 focus:outline-none focus:ring-1 focus:ring-orange-400" />
+                  </div>
                 </div>
               </div>
 
@@ -465,31 +499,6 @@
         </div>
       </div>
 
-      <!-- ── Pause / Continue Modal ──────────────────────────────────────────── -->
-      <div x-show="productCompPauseState" x-cloak
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4">
-          <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Keep searching?</h3>
-          <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-            Tried <span class="font-semibold" x-text="productCompPauseState?.visited"></span> sites for
-            <em x-text="productCompPauseState?.product_title?.slice(0, 50)"></em>
-            and found <span class="font-semibold" x-text="productCompPauseState?.found"></span>
-            / <span x-text="productCompPauseState?.max"></span> competitors.
-            Continue with additional search queries?
-          </p>
-          <div class="flex gap-3">
-            <button @click="resumeCompSearch()"
-              class="flex-1 bg-orange-500 hover:bg-orange-600 text-white font-semibold py-2 rounded-lg text-sm transition">
-              Continue searching
-            </button>
-            <button @click="stopCompSearch()"
-              class="flex-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-semibold py-2 rounded-lg text-sm transition">
-              Stop
-            </button>
-          </div>
-        </div>
-      </div>
-
       <!-- Product Table -->
       <div x-show="!productCompMode" class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
         <div x-show="loadingProducts" class="flex items-center justify-center py-12">
@@ -527,9 +536,15 @@
                     <div class="flex items-center gap-3">
                       <img x-show="p.primary_image" :src="p.primary_image" class="w-10 h-10 object-cover rounded-lg bg-gray-100" loading="lazy" @error="$el.style.display='none'" />
                       <div class="w-10 h-10 bg-gray-100 dark:bg-gray-700 rounded-lg flex items-center justify-center text-lg" x-show="!p.primary_image">📦</div>
-                      <div>
+                      <div class="min-w-0">
                         <div class="font-medium line-clamp-1" x-text="p.title"></div>
                         <div class="text-xs text-gray-400" x-text="p.sku ? 'SKU: ' + p.sku : p.category || ''"></div>
+                        <div class="flex items-center gap-1 mt-1" @click.stop>
+                          <span class="text-[10px] text-gray-400 flex-shrink-0" title="Web-search term — used by all internet searches, saves automatically">🔎</span>
+                          <input type="text" x-model="p.product_search_term" @change="saveProductSearchTerm(p)"
+                            placeholder="search term…" title="Web-search term for this product (auto-saved)"
+                            class="w-full max-w-md text-xs border rounded px-1.5 py-0.5 bg-white dark:bg-gray-700 dark:border-gray-600 focus:outline-none focus:ring-1 focus:ring-orange-400" />
+                        </div>
                       </div>
                     </div>
                   </td>
@@ -671,17 +686,24 @@
           <input x-model="findProductCatalogSearch" @input.debounce.300ms="findProductSearchCatalog()"
             type="text" placeholder="Search catalog..."
             class="w-full border rounded-lg px-3 py-2 text-sm mb-3 dark:bg-gray-700 dark:border-gray-600" />
-          <div class="space-y-1 max-h-52 overflow-y-auto">
+          <div class="space-y-1 overflow-y-auto" style="max-height: 610px;">
             <template x-for="p in findProductCatalogResults" :key="p.id">
-              <label class="flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700"
-                :class="findProductIds.includes(p.id) ? 'bg-blue-50 dark:bg-blue-900/20' : ''">
-                <input type="checkbox" :checked="findProductIds.includes(p.id)"
-                  @change="findProductToggle(p.id)" class="w-4 h-4 flex-shrink-0" />
-                <div class="min-w-0">
-                  <div class="text-sm font-medium truncate" x-text="p.canonical_title || p.title"></div>
-                  <div class="text-xs text-gray-400 font-mono" x-text="p.model_number || p.manufacturer || ''"></div>
+              <div class="rounded" :class="findProductIds.includes(p.id) ? 'bg-blue-50 dark:bg-blue-900/20' : ''">
+                <label class="flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
+                  <input type="checkbox" :checked="findProductIds.includes(p.id)"
+                    @change="findProductToggle(p.id)" class="w-4 h-4 flex-shrink-0" />
+                  <div class="min-w-0">
+                    <div class="text-sm font-medium truncate" x-text="p.canonical_title || p.title"></div>
+                    <div class="text-xs text-gray-400 font-mono" x-text="p.model_number || p.manufacturer || ''"></div>
+                  </div>
+                </label>
+                <div class="flex items-center gap-1 px-2 pb-2">
+                  <span class="text-[10px] text-gray-400 flex-shrink-0" title="Web-search term — auto-saved">🔎</span>
+                  <input type="text" x-model="p.product_search_term" @change="saveProductSearchTerm(p)" @click.stop
+                    placeholder="search term…" title="Web-search term used by the search (auto-saved)"
+                    class="w-full text-xs border rounded px-1.5 py-0.5 bg-white dark:bg-gray-700 dark:border-gray-600 focus:outline-none focus:ring-1 focus:ring-orange-400" />
                 </div>
-              </label>
+              </div>
             </template>
             <div x-show="!findProductCatalogResults.length" class="text-sm text-gray-400 text-center py-4">Type to search products</div>
           </div>
@@ -763,6 +785,10 @@
             class="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-semibold py-2.5 rounded-lg text-sm transition">
             <span x-text="findProductLoading ? '🔍 Searching...' : '🔎 Find This Product'"></span>
           </button>
+          <button x-show="findProductLoading" @click="stopFindProduct()" x-cloak
+            class="w-full mt-2 bg-red-500 hover:bg-red-600 text-white font-semibold py-2 rounded-lg text-sm transition">
+            ⛔ Stop search
+          </button>
 
           <!-- Competitor search trigger for the products selected from the catalog above -->
           <div class="pt-3 border-t dark:border-gray-700">
@@ -805,6 +831,23 @@
             <span>Min competitor match:</span>
             <input type="range" min="0" max="95" step="5" x-model.number="findProductMinFuzzyScore" class="w-20 accent-orange-500" />
             <span class="font-bold text-orange-500 w-8" x-text="findProductMinFuzzyScore + '%'"></span>
+          </div>
+        </div>
+
+        <!-- Active search parameters (shown while searching) -->
+        <div x-show="findProductLoading && findProductActiveParams" x-cloak
+          class="px-4 py-2.5 bg-orange-50 dark:bg-orange-900/20 border-b dark:border-gray-700 text-xs space-y-1">
+          <div class="flex gap-2">
+            <span class="text-gray-500 w-32 flex-shrink-0">Search term</span>
+            <span class="font-medium" x-text="findProductActiveParams?.term"></span>
+          </div>
+          <div class="flex gap-2">
+            <span class="text-gray-500 w-32 flex-shrink-0">Engines &amp; shopping</span>
+            <span class="font-medium" x-text="(findProductActiveParams?.engines || []).join(', ') || 'all engines'"></span>
+          </div>
+          <div class="flex gap-2">
+            <span class="text-gray-500 w-32 flex-shrink-0">Min match confidence</span>
+            <span class="font-bold text-orange-500" x-text="findProductActiveParams?.confidence + '%'"></span>
           </div>
         </div>
 
@@ -872,40 +915,71 @@
       </div>
 
       <!-- Search history -->
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow mt-4" x-show="findProductHistory.length > 0">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow mt-4" x-show="findProductHistoryVisible().length > 0">
         <button class="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold"
           @click="findProductHistoryOpen = !findProductHistoryOpen">
-          <span>Search History (<span x-text="findProductHistory.length"></span>)</span>
+          <span>Search History (<span x-text="findProductHistoryVisible().length"></span>)</span>
           <span x-text="findProductHistoryOpen ? '▲' : '▼'" class="text-gray-400 text-xs"></span>
         </button>
-        <div x-show="findProductHistoryOpen" class="border-t dark:border-gray-700 divide-y dark:divide-gray-700">
-          <template x-for="s in findProductHistory" :key="s.id">
-            <div class="px-4 py-3">
-              <div class="flex items-start justify-between gap-2 mb-1">
-                <span class="text-sm font-medium" x-text="s.query"></span>
-                <span class="text-xs text-gray-400 flex-shrink-0" x-text="new Date(s.searched_at).toLocaleString()"></span>
+        <div x-show="findProductHistoryOpen" class="border-t dark:border-gray-700">
+          <!-- One flat, globally-sortable table of every result line (newest first). -->
+          <div class="px-4 py-1.5 text-[10px] text-gray-400"
+            x-text="'Showing ' + Math.min(historyTotalRows(findProductHistoryVisible()), fpHistoryLimit) + ' of ' + historyTotalRows(findProductHistoryVisible()) + ' result lines (newest first)'"></div>
+          <!-- Sortable column header -->
+          <div class="px-4 py-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-gray-400 border-b dark:border-gray-700 bg-gray-50/60 dark:bg-gray-700/30">
+            <div class="w-5 flex-shrink-0"></div>
+            <button type="button" @click="setSort(fpHistorySort, 'date')" class="w-32 text-left uppercase hover:text-gray-600 dark:hover:text-gray-200">
+              Searched <span x-text="sortIcon(fpHistorySort, 'date')"></span>
+            </button>
+            <button type="button" @click="setSort(fpHistorySort, 'vendor')" class="flex-1 text-left uppercase hover:text-gray-600 dark:hover:text-gray-200">
+              Result / Vendor <span x-text="sortIcon(fpHistorySort, 'vendor')"></span>
+            </button>
+            <button type="button" @click="setSort(fpHistorySort, 'match')" class="w-14 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+              Match <span x-text="sortIcon(fpHistorySort, 'match')"></span>
+            </button>
+            <button type="button" @click="setSort(fpHistorySort, 'our')" class="w-20 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+              Our $ <span x-text="sortIcon(fpHistorySort, 'our')"></span>
+            </button>
+            <button type="button" @click="setSort(fpHistorySort, 'price')" class="w-20 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+              Competitor $ <span x-text="sortIcon(fpHistorySort, 'price')"></span>
+            </button>
+          </div>
+          <div class="divide-y divide-gray-100 dark:divide-gray-700">
+            <template x-for="r in historyFlatRows(findProductHistoryVisible(), fpHistorySort, fpHistoryLimit)" :key="r.id">
+              <div class="px-4 py-2 flex items-center gap-2 text-xs">
+                <!-- Delete this single result -->
+                <button type="button" @click="deleteFindProductResult(r.id)" title="Delete this result"
+                  class="w-5 flex-shrink-0 text-gray-300 hover:text-red-500">✕</button>
+                <!-- Search context: timestamp + query -->
+                <div class="w-32 flex-shrink-0 leading-tight">
+                  <div class="text-gray-400" x-text="new Date(r._searched_at).toLocaleDateString()"></div>
+                  <div class="text-gray-400 truncate" :title="r._query" x-text="r._query"></div>
+                </div>
+                <!-- Result / vendor -->
+                <div class="flex-1 min-w-0 flex items-center gap-2">
+                  <span class="px-1 py-0.5 rounded flex-shrink-0"
+                    :class="r.result_type === 'competitor' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'"
+                    x-text="r.result_type"></span>
+                  <a :href="r.url" target="_blank" class="text-blue-500 hover:underline truncate" x-text="r.title || r.domain"></a>
+                </div>
+                <!-- Match % -->
+                <span class="w-14 text-right flex-shrink-0 text-gray-400"
+                  x-text="r.fuzzy_score != null ? r.fuzzy_score + '%' : '—'"></span>
+                <!-- Our price -->
+                <span class="w-20 text-right flex-shrink-0 text-orange-600 font-medium"
+                  x-text="r.our_price != null ? '$' + Number(r.our_price).toFixed(2) : '—'"></span>
+                <!-- Competitor price (far right) -->
+                <span class="w-20 text-right flex-shrink-0 text-green-600 font-medium"
+                  x-text="r.price != null ? '$' + Number(r.price).toFixed(2) : '—'"></span>
               </div>
-              <div class="flex gap-2 text-xs text-gray-500 flex-wrap mb-2">
-                <span x-show="s.model_number" x-text="'Model: ' + s.model_number"></span>
-                <span x-show="s.category" x-text="'Category: ' + s.category"></span>
-                <span x-text="s.results.length + ' results'"></span>
-              </div>
-              <div class="space-y-1">
-                <template x-for="r in s.results.slice(0,3)" :key="r.url">
-                  <div class="flex items-center gap-2 text-xs">
-                    <span class="px-1 py-0.5 rounded text-xs"
-                      :class="r.result_type === 'competitor' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'"
-                      x-text="r.result_type"></span>
-                    <a :href="r.url" target="_blank" class="text-blue-500 hover:underline truncate max-w-xs" x-text="r.title || r.domain"></a>
-                    <span x-show="r.price" class="text-green-600 font-medium" x-text="'$' + Number(r.price).toFixed(2)"></span>
-                    <span x-show="r.fuzzy_score" class="text-gray-400" x-text="r.fuzzy_score + '%'"></span>
-                  </div>
-                </template>
-                <div x-show="s.results.length > 3" class="text-xs text-gray-400"
-                  x-text="'+ ' + (s.results.length - 3) + ' more'"></div>
-              </div>
-            </div>
-          </template>
+            </template>
+          </div>
+          <div x-show="historyTotalRows(findProductHistoryVisible()) > fpHistoryLimit"
+            class="px-4 py-3 border-t dark:border-gray-700 text-center">
+            <button type="button" @click="fpHistoryLimit += 50"
+              class="text-xs font-medium text-blue-500 hover:underline"
+              x-text="'Show next ' + Math.min(50, historyTotalRows(findProductHistoryVisible()) - fpHistoryLimit)"></button>
+          </div>
         </div>
       </div>
     </div>
@@ -931,22 +1005,29 @@
           <input x-model="beatPriceCatalogSearch" @input.debounce.300ms="beatPriceSearchCatalog()"
             type="text" placeholder="Search catalog (title, manufacturer, model)..."
             class="w-full border rounded-lg px-3 py-2 text-sm mb-3 dark:bg-gray-700 dark:border-gray-600" />
-          <div class="space-y-1 max-h-72 overflow-y-auto">
+          <div class="space-y-1 overflow-y-auto" style="max-height: 576px;">
             <template x-for="p in beatPriceCatalogResults" :key="p.id">
-              <label class="flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700"
-                :class="beatPriceProductIds.includes(p.id) ? 'bg-blue-50 dark:bg-blue-900/20' : ''">
-                <input type="checkbox" :checked="beatPriceProductIds.includes(p.id)"
-                  @change="beatPriceToggleProduct(p.id)" class="w-4 h-4 flex-shrink-0" />
-                <div class="min-w-0 flex-1">
-                  <div class="text-sm font-medium truncate" x-text="p.canonical_title || p.title"></div>
-                  <div class="text-xs text-gray-400 flex items-center gap-2">
-                    <span x-show="p.manufacturer" x-text="p.manufacturer"></span>
-                    <span x-show="p.model_number" class="font-mono" x-text="p.model_number"></span>
-                    <span x-show="p.price_canonical != null" class="text-orange-600 font-medium ml-auto"
-                      x-text="'$' + Number(p.price_canonical).toFixed(2)"></span>
+              <div class="rounded" :class="beatPriceProductIds.includes(p.id) ? 'bg-blue-50 dark:bg-blue-900/20' : ''">
+                <label class="flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
+                  <input type="checkbox" :checked="beatPriceProductIds.includes(p.id)"
+                    @change="beatPriceToggleProduct(p.id)" class="w-4 h-4 flex-shrink-0" />
+                  <div class="min-w-0 flex-1">
+                    <div class="text-sm font-medium truncate" x-text="p.canonical_title || p.title"></div>
+                    <div class="text-xs text-gray-400 flex items-center gap-2">
+                      <span x-show="p.manufacturer" x-text="p.manufacturer"></span>
+                      <span x-show="p.model_number" class="font-mono" x-text="p.model_number"></span>
+                      <span x-show="p.price_canonical != null" class="text-orange-600 font-medium ml-auto"
+                        x-text="'$' + Number(p.price_canonical).toFixed(2)"></span>
+                    </div>
                   </div>
+                </label>
+                <div class="flex items-center gap-1 px-2 pb-2">
+                  <span class="text-[10px] text-gray-400 flex-shrink-0" title="Web-search term — auto-saved">🔎</span>
+                  <input type="text" x-model="p.product_search_term" @change="saveProductSearchTerm(p)" @click.stop
+                    placeholder="search term…" title="Web-search term used by the search (auto-saved)"
+                    class="w-full text-xs border rounded px-1.5 py-0.5 bg-white dark:bg-gray-700 dark:border-gray-600 focus:outline-none focus:ring-1 focus:ring-orange-400" />
                 </div>
-              </label>
+              </div>
             </template>
             <div x-show="!beatPriceCatalogResults.length" class="text-sm text-gray-400 text-center py-6">
               Type in the box above to search our catalog
@@ -979,6 +1060,13 @@
               <input x-model="beatPriceForm.price_max" type="number" min="0" placeholder="no limit"
                 class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
             </div>
+          </div>
+          <div>
+            <label class="text-sm font-medium block mb-1">Confidence (%)
+              <span class="text-xs text-gray-400 font-normal">(optional — minimum match confidence)</span>
+            </label>
+            <input x-model="beatPriceForm.confidence" type="number" min="0" max="100" placeholder="e.g. 50"
+              class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
           </div>
           <div>
             <label class="text-sm font-medium block mb-2">Additional Characteristics</label>
@@ -1040,6 +1128,10 @@
             <span x-show="!beatPriceLoading">💡 Find Better Prices</span>
             <span x-show="beatPriceLoading">💡 Searching...</span>
           </button>
+          <button x-show="beatPriceLoading" @click="stopBeatPrice()" x-cloak
+            class="w-full mt-2 bg-red-500 hover:bg-red-600 text-white font-semibold py-2 rounded-lg text-sm transition">
+            ⛔ Stop search
+          </button>
           <div x-show="beatPriceLoading && beatPriceProgress" class="text-xs text-gray-500 truncate" x-text="beatPriceProgress"></div>
         </div>
       </div>
@@ -1074,34 +1166,59 @@
             <div x-show="!g.error && (!g.results || g.results.length === 0)" class="px-4 py-6 text-center text-sm text-gray-400">
               No alternate suppliers found for this product.
             </div>
+            <!-- Sortable column header -->
+            <div x-show="g.results && g.results.length > 0"
+              class="px-4 py-2 flex gap-3 items-center text-[10px] uppercase tracking-wide text-gray-400 border-b dark:border-gray-700 bg-gray-50/60 dark:bg-gray-700/30">
+              <div class="w-36 flex-shrink-0">Search</div>
+              <div class="w-12 flex-shrink-0"></div>
+              <button type="button" @click="setBeatSort('vendor')" class="flex-1 text-left uppercase hover:text-gray-600 dark:hover:text-gray-200">
+                Vendor <span x-text="sortIcon(beatPriceSort, 'vendor')"></span>
+              </button>
+              <button type="button" @click="setBeatSort('confidence')" class="w-14 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+                Conf <span x-text="sortIcon(beatPriceSort, 'confidence')"></span>
+              </button>
+              <div class="w-[72px] text-right">Our Price</div>
+              <button type="button" @click="setBeatSort('price')" class="w-[84px] text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+                Vendor Price <span x-text="sortIcon(beatPriceSort, 'price')"></span>
+              </button>
+            </div>
             <div x-show="g.results && g.results.length > 0" class="divide-y divide-gray-100 dark:divide-gray-700">
-              <template x-for="r in g.results" :key="r.url">
-                <div class="px-4 py-3 flex gap-4">
-                  <div class="w-14 h-14 flex-shrink-0 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden flex items-center justify-center">
+              <template x-for="r in sortedBeatResults(g.results)" :key="r.url">
+                <div class="px-4 py-3 flex gap-3 items-start">
+                  <!-- Search timestamp + params used -->
+                  <div class="w-36 flex-shrink-0 text-[10px] text-gray-400 leading-tight">
+                    <div x-text="r._ts"></div>
+                    <div class="line-clamp-2" :title="r._params" x-text="r._params"></div>
+                  </div>
+                  <div class="w-12 h-12 flex-shrink-0 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden flex items-center justify-center">
                     <img x-show="r.image" :src="r.image" class="w-full h-full object-cover"
                       @error="$el.style.display='none'" loading="lazy" />
                     <span x-show="!r.image" class="text-2xl">🏭</span>
                   </div>
                   <div class="flex-1 min-w-0">
-                    <div class="flex items-start justify-between gap-2">
-                      <div class="text-sm font-semibold line-clamp-1" x-text="r.title"></div>
-                      <!-- Price + diff vs our price -->
-                      <div class="text-right flex-shrink-0 ml-2 min-w-[70px]">
-                        <div class="font-bold text-sm"
-                             :class="r.price == null ? 'text-gray-400 dark:text-gray-500' : (r.price > g.our_price ? 'text-green-600' : (r.price < g.our_price ? 'text-red-500' : 'text-gray-700 dark:text-gray-200'))"
-                             x-text="r.price != null ? fmtPrice(r.price) : '—'"></div>
-                        <div x-show="r.price != null && g.our_price != null"
-                             class="text-xs font-semibold"
-                             :class="(r.price - g.our_price) > 0 ? 'text-green-600' : 'text-red-500'"
-                             x-text="fmtDollarDiff(r.price - g.our_price)"></div>
-                      </div>
-                    </div>
+                    <div class="text-sm font-semibold line-clamp-1" x-text="r.title"></div>
                     <div class="text-xs text-gray-500 line-clamp-2 mt-0.5" x-text="r.description"></div>
                     <div class="flex items-center gap-3 mt-1">
                       <span x-show="r.model_number" class="text-xs font-mono text-gray-400" x-text="r.model_number"></span>
                       <a :href="r.url" target="_blank" rel="noopener"
                         class="text-xs text-blue-500 hover:underline truncate" x-text="r.domain"></a>
                     </div>
+                  </div>
+                  <!-- Confidence % -->
+                  <div class="w-14 text-right flex-shrink-0 text-xs font-medium text-gray-500 dark:text-gray-400"
+                       x-text="r.fuzzy_score != null ? r.fuzzy_score + '%' : '—'"></div>
+                  <!-- Our price (immediately left of vendor price) -->
+                  <div class="w-[72px] text-right flex-shrink-0 text-sm font-medium text-orange-600"
+                       x-text="g.our_price != null ? fmtPrice(g.our_price) : '—'"></div>
+                  <!-- Vendor price + diff vs our price -->
+                  <div class="w-[84px] text-right flex-shrink-0">
+                    <div class="font-bold text-sm"
+                         :class="r.price == null ? 'text-gray-400 dark:text-gray-500' : (r.price > g.our_price ? 'text-green-600' : (r.price < g.our_price ? 'text-red-500' : 'text-gray-700 dark:text-gray-200'))"
+                         x-text="r.price != null ? fmtPrice(r.price) : '—'"></div>
+                    <div x-show="r.price != null && g.our_price != null"
+                         class="text-xs font-semibold"
+                         :class="(r.price - g.our_price) > 0 ? 'text-green-600' : 'text-red-500'"
+                         x-text="fmtDollarDiff(r.price - g.our_price)"></div>
                   </div>
                 </div>
               </template>
@@ -1113,27 +1230,54 @@
       <!-- Results: flat list for free-text-only path -->
       <div x-show="beatPriceResults.length > 0 && beatPriceGroupedResults.length === 0" class="space-y-3">
         <h3 class="font-semibold" x-text="`${beatPriceResults.length} supplier${beatPriceResults.length !== 1 ? 's' : ''} found`"></h3>
-        <template x-for="r in beatPriceResults" :key="r.url">
-          <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 flex gap-4">
-            <div class="w-16 h-16 flex-shrink-0 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden flex items-center justify-center">
-              <img x-show="r.image" :src="r.image" class="w-full h-full object-cover"
-                @error="$el.style.display='none'" loading="lazy" />
-              <span x-show="!r.image" class="text-2xl">🏭</span>
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="flex items-start justify-between gap-2">
-                <div class="text-sm font-semibold line-clamp-1" x-text="r.title"></div>
-                <span x-show="r.price != null" class="text-green-600 font-bold text-sm flex-shrink-0" x-text="fmtPrice(r.price)"></span>
-              </div>
-              <div class="text-xs text-gray-500 line-clamp-2 mt-0.5" x-text="r.description"></div>
-              <div class="flex items-center gap-3 mt-2">
-                <span x-show="r.model_number" class="text-xs font-mono text-gray-400" x-text="r.model_number"></span>
-                <a :href="r.url" target="_blank" rel="noopener"
-                  class="text-xs text-blue-500 hover:underline truncate" x-text="r.domain"></a>
-              </div>
-            </div>
+        <div class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
+          <!-- Sortable column header -->
+          <div class="px-4 py-2 flex gap-3 items-center text-[10px] uppercase tracking-wide text-gray-400 border-b dark:border-gray-700 bg-gray-50/60 dark:bg-gray-700/30">
+            <div class="w-36 flex-shrink-0">Search</div>
+            <div class="w-12 flex-shrink-0"></div>
+            <button type="button" @click="setBeatSort('vendor')" class="flex-1 text-left uppercase hover:text-gray-600 dark:hover:text-gray-200">
+              Vendor <span x-text="sortIcon(beatPriceSort, 'vendor')"></span>
+            </button>
+            <button type="button" @click="setBeatSort('confidence')" class="w-14 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+              Conf <span x-text="sortIcon(beatPriceSort, 'confidence')"></span>
+            </button>
+            <button type="button" @click="setBeatSort('price')" class="w-[84px] text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+              Vendor Price <span x-text="sortIcon(beatPriceSort, 'price')"></span>
+            </button>
           </div>
-        </template>
+          <div class="divide-y divide-gray-100 dark:divide-gray-700">
+            <template x-for="r in sortedBeatResults(beatPriceResults)" :key="r.url">
+              <div class="px-4 py-3 flex gap-3 items-start">
+                <!-- Search timestamp + params used -->
+                <div class="w-36 flex-shrink-0 text-[10px] text-gray-400 leading-tight">
+                  <div x-text="r._ts"></div>
+                  <div class="line-clamp-2" :title="r._params" x-text="r._params"></div>
+                </div>
+                <div class="w-12 h-12 flex-shrink-0 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden flex items-center justify-center">
+                  <img x-show="r.image" :src="r.image" class="w-full h-full object-cover"
+                    @error="$el.style.display='none'" loading="lazy" />
+                  <span x-show="!r.image" class="text-2xl">🏭</span>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-semibold line-clamp-1" x-text="r.title"></div>
+                  <div class="text-xs text-gray-500 line-clamp-2 mt-0.5" x-text="r.description"></div>
+                  <div class="flex items-center gap-3 mt-1">
+                    <span x-show="r.model_number" class="text-xs font-mono text-gray-400" x-text="r.model_number"></span>
+                    <a :href="r.url" target="_blank" rel="noopener"
+                      class="text-xs text-blue-500 hover:underline truncate" x-text="r.domain"></a>
+                  </div>
+                </div>
+                <!-- Confidence % -->
+                <div class="w-14 text-right flex-shrink-0 text-xs font-medium text-gray-500 dark:text-gray-400"
+                     x-text="r.fuzzy_score != null ? r.fuzzy_score + '%' : '—'"></div>
+                <!-- Vendor price -->
+                <div class="w-[84px] text-right flex-shrink-0 font-bold text-sm"
+                     :class="r.price == null ? 'text-gray-400 dark:text-gray-500' : 'text-green-600'"
+                     x-text="r.price != null ? fmtPrice(r.price) : '—'"></div>
+              </div>
+            </template>
+          </div>
+        </div>
       </div>
 
       <!-- Empty state -->
@@ -1144,38 +1288,66 @@
       </div>
 
       <!-- Beat Price search history -->
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow mt-4" x-show="beatPriceHistory.length > 0">
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow mt-4" x-show="beatPriceHistoryVisible().length > 0">
         <button class="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold"
           @click="beatPriceHistoryOpen = !beatPriceHistoryOpen">
-          <span>Search History (<span x-text="beatPriceHistory.length"></span>)</span>
+          <span>Search History (<span x-text="beatPriceHistoryVisible().length"></span>)</span>
           <span x-text="beatPriceHistoryOpen ? '▲' : '▼'" class="text-gray-400 text-xs"></span>
         </button>
-        <div x-show="beatPriceHistoryOpen" class="border-t dark:border-gray-700 divide-y dark:divide-gray-700">
-          <template x-for="s in beatPriceHistory" :key="s.id">
-            <div class="px-4 py-3">
-              <div class="flex items-start justify-between gap-2 mb-1">
-                <span class="text-sm font-medium line-clamp-1" x-text="s.description"></span>
-                <span class="text-xs text-gray-400 flex-shrink-0" x-text="new Date(s.searched_at).toLocaleString()"></span>
+        <div x-show="beatPriceHistoryOpen" class="border-t dark:border-gray-700">
+          <!-- One flat, globally-sortable table of every result line (newest first). -->
+          <div class="px-4 py-1.5 text-[10px] text-gray-400"
+            x-text="'Showing ' + Math.min(historyTotalRows(beatPriceHistoryVisible()), bpHistoryLimit) + ' of ' + historyTotalRows(beatPriceHistoryVisible()) + ' result lines (newest first)'"></div>
+          <!-- Sortable column header -->
+          <div class="px-4 py-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-gray-400 border-b dark:border-gray-700 bg-gray-50/60 dark:bg-gray-700/30">
+            <div class="w-5 flex-shrink-0"></div>
+            <button type="button" @click="setSort(bpHistorySort, 'date')" class="w-32 text-left uppercase hover:text-gray-600 dark:hover:text-gray-200">
+              Searched <span x-text="sortIcon(bpHistorySort, 'date')"></span>
+            </button>
+            <button type="button" @click="setSort(bpHistorySort, 'vendor')" class="flex-1 text-left uppercase hover:text-gray-600 dark:hover:text-gray-200">
+              Result / Vendor <span x-text="sortIcon(bpHistorySort, 'vendor')"></span>
+            </button>
+            <button type="button" @click="setSort(bpHistorySort, 'match')" class="w-14 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+              Match <span x-text="sortIcon(bpHistorySort, 'match')"></span>
+            </button>
+            <button type="button" @click="setSort(bpHistorySort, 'our')" class="w-20 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+              Our $ <span x-text="sortIcon(bpHistorySort, 'our')"></span>
+            </button>
+            <button type="button" @click="setSort(bpHistorySort, 'price')" class="w-20 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+              Competitor $ <span x-text="sortIcon(bpHistorySort, 'price')"></span>
+            </button>
+          </div>
+          <div class="divide-y divide-gray-100 dark:divide-gray-700">
+            <template x-for="r in historyFlatRows(beatPriceHistoryVisible(), bpHistorySort, bpHistoryLimit)" :key="r.id">
+              <div class="px-4 py-2 flex items-center gap-2 text-xs">
+                <!-- Delete this single result -->
+                <button type="button" @click="deleteBeatPriceResult(r.id)" title="Delete this result"
+                  class="w-5 flex-shrink-0 text-gray-300 hover:text-red-500">✕</button>
+                <!-- Search context: timestamp + description -->
+                <div class="w-32 flex-shrink-0 leading-tight">
+                  <div class="text-gray-400" x-text="new Date(r._searched_at).toLocaleDateString()"></div>
+                  <div class="text-gray-400 truncate" :title="r._query" x-text="r._query"></div>
+                </div>
+                <!-- Result / vendor -->
+                <a :href="r.url" target="_blank" class="flex-1 min-w-0 text-blue-500 hover:underline truncate" x-text="r.title || r.domain"></a>
+                <!-- Match % -->
+                <span class="w-14 text-right flex-shrink-0 text-gray-400"
+                  x-text="r.fuzzy_score != null ? r.fuzzy_score + '%' : '—'"></span>
+                <!-- Our price -->
+                <span class="w-20 text-right flex-shrink-0 text-orange-600 font-medium"
+                  x-text="r.our_price != null ? '$' + Number(r.our_price).toFixed(2) : '—'"></span>
+                <!-- Competitor price (far right) -->
+                <span class="w-20 text-right flex-shrink-0 text-green-600 font-medium"
+                  x-text="r.price != null ? '$' + Number(r.price).toFixed(2) : '—'"></span>
               </div>
-              <div class="flex gap-2 text-xs text-gray-500 flex-wrap mb-2">
-                <span x-show="s.model_number" x-text="'Model: ' + s.model_number"></span>
-                <span x-show="s.price_min" x-text="'Min: $' + s.price_min"></span>
-                <span x-show="s.price_max" x-text="'Max: $' + s.price_max"></span>
-                <span x-text="s.results.length + ' results'"></span>
-              </div>
-              <div class="space-y-1">
-                <template x-for="r in s.results.slice(0,3)" :key="r.url">
-                  <div class="flex items-center gap-2 text-xs">
-                    <a :href="r.url" target="_blank" class="text-blue-500 hover:underline truncate max-w-xs" x-text="r.title || r.domain"></a>
-                    <span x-show="r.price" class="text-green-600 font-medium" x-text="'$' + Number(r.price).toFixed(2)"></span>
-                    <span class="text-gray-400" x-text="r.domain"></span>
-                  </div>
-                </template>
-                <div x-show="s.results.length > 3" class="text-xs text-gray-400"
-                  x-text="'+ ' + (s.results.length - 3) + ' more'"></div>
-              </div>
-            </div>
-          </template>
+            </template>
+          </div>
+          <div x-show="historyTotalRows(beatPriceHistoryVisible()) > bpHistoryLimit"
+            class="px-4 py-3 border-t dark:border-gray-700 text-center">
+            <button type="button" @click="bpHistoryLimit += 50"
+              class="text-xs font-medium text-blue-500 hover:underline"
+              x-text="'Show next ' + Math.min(50, historyTotalRows(beatPriceHistoryVisible()) - bpHistoryLimit)"></button>
+          </div>
         </div>
       </div>
     </div>
@@ -1415,7 +1587,7 @@
             class="flex items-center gap-3 px-4 py-2 bg-orange-50 dark:bg-orange-900/20 border-b border-orange-200 dark:border-orange-800 text-sm">
             <span class="font-medium text-orange-700 dark:text-orange-300"
               x-text="`${competitorSelected.length} selected`"></span>
-            <button @click="openBulkDeleteModal()"
+            <button @click="requestBulkDelete()"
               class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-xs font-medium">
               Delete Selected
             </button>
@@ -1428,8 +1600,8 @@
           <div class="flex items-center bg-gray-50 dark:bg-gray-700 text-gray-500 text-xs border-b border-gray-200 dark:border-gray-600 cols-divided cols-divided-header">
             <div style="order: -1" class="flex-shrink-0 px-3 py-2 w-10 flex items-center justify-center">
               <input type="checkbox"
-                :checked="competitorSelected.length > 0 && competitorSelected.length === (competitors?.competitors || []).length"
-                :indeterminate.prop="competitorSelected.length > 0 && competitorSelected.length < (competitors?.competitors || []).length"
+                :checked="allCurrentPageSelected()"
+                :indeterminate.prop="someCurrentPageSelected()"
                 @change="selectAllCompetitors()"
                 class="w-4 h-4 rounded border-gray-300 text-orange-500 cursor-pointer" />
             </div>
@@ -1558,14 +1730,12 @@
       class="fixed inset-0 bg-black/60 z-40 flex items-center justify-center"
       @click.self="competitorDeleteModal = false">
       <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md mx-4 p-6">
-        <h3 class="text-lg font-bold mb-1">Delete Competitor<span x-text="competitorSelected.length !== 1 ? 's' : ''"></span></h3>
+        <h3 class="text-lg font-bold mb-1">Delete competitors?</h3>
         <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
-          Permanently delete
+          Do you want to delete the
           <span class="font-semibold text-gray-800 dark:text-gray-200"
-            x-text="competitorSelected.length === 1
-              ? `'${ (competitors?.competitors || []).find(c => c.id === competitorSelected[0])?.domain || 'this competitor' }'`
-              : `${competitorSelected.length} competitors`"></span>
-          and all their scans, matches, and price history? This cannot be undone.
+            x-text="`${competitorSelected.length} competitors`"></span>
+          you selected? All their scans, matches, and price history will be removed. This cannot be undone.
         </p>
         <label class="flex items-start gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 mb-5">
           <input type="checkbox" x-model="competitorDeleteExclude"
@@ -1578,13 +1748,13 @@
           </div>
         </label>
         <div class="flex justify-end gap-2">
-          <button @click="competitorDeleteModal = false"
+          <button @click="cancelBulkDelete()"
             class="px-4 py-2 rounded text-sm bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200">
-            Cancel
+            No
           </button>
           <button @click="confirmDeleteCompetitors()"
             class="px-4 py-2 rounded text-sm bg-red-500 hover:bg-red-600 text-white font-medium">
-            Delete
+            Yes, delete
           </button>
         </div>
       </div>
@@ -2501,6 +2671,19 @@
         </div>
       </div>
     </div>
+    <!-- Product search term — editable, auto-saved, used by all internet searches -->
+    <template x-if="selectedProduct">
+      <div class="mb-4 border-t pt-3">
+        <div class="flex items-center justify-between mb-1">
+          <span class="font-semibold text-gray-700 dark:text-gray-300 text-sm">🔎 Product Search Term</span>
+          <span class="text-xs text-gray-400">used by all internet searches · saves automatically</span>
+        </div>
+        <textarea x-model="selectedProduct.product_search_term" @change="saveProductSearchTerm(selectedProduct)"
+          rows="2" placeholder="Words used to search the web for this product…"
+          class="w-full text-sm border rounded-lg px-3 py-2 dark:bg-gray-700 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-orange-400"></textarea>
+        <div class="text-xs text-gray-400 mt-1">Edit to catch competitors the scraped title misses. Default = the titles from each store.</div>
+      </div>
+    </template>
     <div x-show="selectedProduct?.description" class="text-sm text-gray-600 dark:text-gray-400 mb-4 border-t pt-3">
       <div class="font-semibold text-gray-700 dark:text-gray-300 mb-1">Description</div>
       <p x-text="selectedProduct?.description" class="line-clamp-6"></p>
@@ -2659,8 +2842,16 @@
       Products this competitor carries that match our catalog
       (<span x-text="competitorDetail?.matches?.length || 0"></span>)
     </div>
+    <!-- Sort controls for matches -->
+    <div x-show="competitorDetail?.matches?.length" class="flex items-center gap-3 text-[11px] font-semibold text-gray-500 dark:text-gray-400 px-2 mb-1 select-none">
+      <button @click="setSort(matchSort, 'title')" class="hover:text-orange-500">Product <span x-text="sortIcon(matchSort, 'title')" class="opacity-60"></span></button>
+      <button @click="setSort(matchSort, 'manufacturer')" class="hover:text-orange-500">Manufacturer <span x-text="sortIcon(matchSort, 'manufacturer')" class="opacity-60"></span></button>
+      <button @click="setSort(matchSort, 'confidence')" class="hover:text-orange-500">Confidence <span x-text="sortIcon(matchSort, 'confidence')" class="opacity-60"></span></button>
+      <button @click="setSort(matchSort, 'price')" class="ml-auto hover:text-orange-500">Their Price <span x-text="sortIcon(matchSort, 'price')" class="opacity-60"></span></button>
+      <button @click="setSort(matchSort, 'variance')" class="hover:text-orange-500">Variance <span x-text="sortIcon(matchSort, 'variance')" class="opacity-60"></span></button>
+    </div>
     <div class="space-y-1.5 max-h-72 overflow-y-auto mb-4">
-      <template x-for="m in (competitorDetail?.matches || [])" :key="m.id">
+      <template x-for="m in sortedMatches()" :key="m.id">
         <div class="text-xs bg-gray-50 dark:bg-gray-700 rounded p-2">
           <div class="flex items-start justify-between gap-3">
             <div class="flex-1 min-w-0">
@@ -2670,8 +2861,6 @@
               <div class="flex items-center gap-2 text-gray-500 dark:text-gray-400">
                 <span x-show="m.master_manufacturer" x-text="m.master_manufacturer"></span>
                 <span x-show="m.master_model_number" class="font-mono" x-text="m.master_model_number"></span>
-                <span x-show="m.our_price != null" class="text-orange-600 font-medium"
-                  x-text="'Our: $' + Number(m.our_price).toFixed(2)"></span>
               </div>
               <!-- Competitor's listing -->
               <div class="mt-1 text-gray-600 dark:text-gray-300 truncate"
@@ -2679,14 +2868,17 @@
               <div class="flex items-center gap-2 text-gray-400 mt-0.5">
                 <span x-text="m.match_type || ''"></span>
                 <span x-show="m.confidence" x-text="Math.round(m.confidence) + '% confidence'"></span>
-                <span x-show="m.in_stock === false" class="text-red-500">out of stock</span>
               </div>
             </div>
             <div class="text-right shrink-0">
-              <div class="font-bold text-green-600 text-base"
-                x-text="m.price != null ? '$' + Number(m.price).toFixed(2) : '—'"></div>
+              <div class="flex items-baseline justify-end gap-2">
+                <span class="text-[10px] text-gray-500 dark:text-gray-400">Our: <span x-text="m.our_price != null ? '$' + Number(m.our_price).toFixed(2) : '—'"></span></span>
+                <span class="font-bold text-base"
+                  :class="(m.price == null || m.our_price == null) ? 'text-gray-700 dark:text-gray-200' : (m.price < m.our_price ? 'text-red-600' : (m.price > m.our_price ? 'text-green-600' : 'text-gray-700 dark:text-gray-200'))"
+                  x-text="m.price != null ? '$' + Number(m.price).toFixed(2) : '—'"></span>
+              </div>
               <div x-show="m.price != null && m.our_price != null" class="text-[10px]"
-                :class="(m.price < m.our_price) ? 'text-green-600' : 'text-red-600'"
+                :class="(m.price < m.our_price) ? 'text-red-600' : (m.price > m.our_price ? 'text-green-600' : 'text-gray-400')"
                 x-text="(m.price < m.our_price ? '−' : '+') + Math.abs(((m.price - m.our_price) / m.our_price * 100)).toFixed(1) + '%'"></div>
               <a x-show="m.url" :href="m.url" target="_blank" rel="noopener"
                 class="block text-blue-500 hover:text-blue-700 mt-1">Open ↗</a>
@@ -2779,6 +2971,6 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=20260625-01"></script>
+<script src="/static/js/app.js?v=20260625-02"></script>
 </body>
 </html>

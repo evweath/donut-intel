@@ -670,7 +670,10 @@ async def _search_competitor_site(
     for pattern in _SITE_SEARCH_PATTERNS:
         url = base + pattern.format(q=q)
         try:
-            html = await _curl_get(url, timeout=10)
+            # Probe each candidate URL once (retries=1) with a tight timeout: a dead
+            # or wrong pattern should fail fast and let the next pattern try, rather
+            # than paying 3× retry latency across 10 patterns × hundreds of domains.
+            html = await _curl_get(url, timeout=5, retries=1)
         except Exception:
             continue
         if not html or len(html) < 300:
