@@ -45,7 +45,7 @@
     <nav class="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
       <template x-for="item in navItems" :key="item.id">
         <button
-          @click="currentView = item.id; item.id === 'products' && loadProducts(1); item.id === 'competitors' && loadCompetitors(1); item.id === 'pricing' && (priceMatrixFilters.manufacturer || priceMatrixFilters.category || priceMatrixFilters.source_site || priceMatrixFilters.search ? loadPriceMatrix(1) : (priceMatrixHasSearched = false)); item.id === 'scheduler' && loadJobs(); item.id === 'export' && loadExportHistory(); item.id === 'find-product' && (findProductSearchCatalog(), loadFindProductHistory()); item.id === 'beat-price' && (beatPriceSearchCatalog(), loadBeatPriceHistory())"
+          @click="currentView = item.id; item.id === 'products' && loadProducts(1); item.id === 'competitors' && loadCompetitors(1); item.id === 'pricing' && (priceMatrixFilters.manufacturer || priceMatrixFilters.category || priceMatrixFilters.source_site || priceMatrixFilters.search ? loadPriceMatrix(1) : (priceMatrixHasSearched = false)); item.id === 'scheduler' && (loadJobs(), loadEmailSettings()); item.id === 'export' && loadExportHistory(); item.id === 'find-product' && (findProductSearchCatalog(), loadFindProductHistory()); item.id === 'beat-price' && (beatPriceSearchCatalog(), loadBeatPriceHistory())"
           :class="currentView === item.id
             ? 'bg-orange-600 text-white'
             : 'text-gray-300 hover:bg-gray-700 hover:text-white'"
@@ -95,7 +95,17 @@
       class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
       <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4">
         <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">Keep searching?</h3>
-        <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">
+        <!-- Beat-Price: show successful + potential match counts -->
+        <p x-show="pausePrompt?.successful !== undefined" class="text-sm text-gray-600 dark:text-gray-400 mb-1">
+          Found <span class="font-semibold text-green-600" x-text="pausePrompt?.successful"></span>
+          successful match<span x-show="pausePrompt?.successful !== 1">es</span>
+          (match &amp; price) and <span class="font-semibold text-amber-600" x-text="pausePrompt?.potential"></span>
+          potential match<span x-show="pausePrompt?.potential !== 1">es</span>
+          (matched the product but outside your price limit) so far.
+          Do you want to continue searching?
+        </p>
+        <!-- Other searches: simple count -->
+        <p x-show="pausePrompt?.successful === undefined" class="text-sm text-gray-600 dark:text-gray-400 mb-1">
           Found <span class="font-semibold" x-text="pausePrompt?.found"></span>
           competitor<span x-show="pausePrompt?.found !== 1">s</span> so far<span
             x-show="pausePrompt?.product_title" x-text="' for ' + (pausePrompt?.product_title || '').slice(0, 50)"></span>.
@@ -677,6 +687,14 @@
       <div class="mb-6">
         <h2 class="text-2xl font-bold mb-1">Find This Product</h2>
         <p class="text-sm text-gray-500">Search the web for matching or similar products outside your existing competitor list.</p>
+        <label class="flex items-center gap-2 mt-2 text-sm cursor-pointer">
+          <input type="checkbox" x-model="findProductTiedToProduct"
+            @change="notifyTiedToProduct(findProductTiedToProduct)" class="w-4 h-4" />
+          <span>This search is tied to a product in our store</span>
+        </label>
+        <div x-show="!findProductTiedToProduct" x-cloak class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+          ⚠ No price will be associated to the search results unless the search is tied to a product in our store.
+        </div>
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -749,6 +767,11 @@
               <option value="10">10</option>
             </select>
           </div>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" x-model="findProductUsaOnly" class="w-4 h-4" />
+            <span>🇺🇸 USA websites only</span>
+            <span class="text-xs text-gray-400">(excludes foreign country domains)</span>
+          </label>
           <!-- Search engine / shopping site selection -->
           <div class="border rounded-lg p-3 dark:border-gray-600">
             <div class="flex items-center justify-between mb-2">
@@ -788,6 +811,10 @@
           <button x-show="findProductLoading" @click="stopFindProduct()" x-cloak
             class="w-full mt-2 bg-red-500 hover:bg-red-600 text-white font-semibold py-2 rounded-lg text-sm transition">
             ⛔ Stop search
+          </button>
+          <button @click="scheduleFindProductSearch()" type="button"
+            class="w-full mt-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 font-medium py-2 rounded-lg text-sm transition">
+            📅 Schedule this search…
           </button>
 
           <!-- Competitor search trigger for the products selected from the catalog above -->
@@ -908,6 +935,19 @@
                   <span x-show="r.source_query" class="text-xs text-gray-400 italic" x-text="'via: ' + r.source_query"></span>
                   <span x-show="r.competitor_id" class="text-xs text-purple-500">✓ tracked competitor</span>
                 </div>
+                <!-- Our price / projected cost / confirmed -->
+                <div class="flex items-center gap-4 mt-1.5 text-xs">
+                  <span class="text-orange-600 font-medium">Our: <span x-text="fmtPrice(findProductOurPrice)"></span></span>
+                  <span class="text-blue-600 dark:text-blue-400 font-medium" title="Our projected cost = our price × 0.7">Projected: <span x-text="fmtProjected(findProductOurPrice)"></span></span>
+                  <label class="flex items-center gap-1 cursor-pointer text-gray-500 dark:text-gray-400"
+                    title="Tick after visiting the link and verifying the product is the same/comparable and the price is correct">
+                    <input type="checkbox" class="w-3.5 h-3.5"
+                      :checked="isConfirmed(r.url)" @change="toggleConfirmed(r.url, $event.target.checked)" />
+                    Confirmed
+                    <span x-show="isConfirmed(r.url)" class="text-gray-400 ml-0.5"
+                      title="Date verified">(<span x-text="confirmedAtLabel(r.url)"></span>)</span>
+                  </label>
+                </div>
               </div>
             </div>
           </template>
@@ -925,31 +965,49 @@
           <!-- One flat, globally-sortable table of every result line (newest first). -->
           <div class="px-4 py-1.5 text-[10px] text-gray-400"
             x-text="'Showing ' + Math.min(historyTotalRows(findProductHistoryVisible()), fpHistoryLimit) + ' of ' + historyTotalRows(findProductHistoryVisible()) + ' result lines (newest first)'"></div>
+          <!-- Bulk-selection controls -->
+          <div class="px-4 pb-2 flex items-center gap-3 text-xs">
+            <label class="flex items-center gap-1.5 cursor-pointer font-medium text-gray-600 dark:text-gray-300">
+              <input type="checkbox" class="w-4 h-4"
+                :checked="historyAllSelected(historyFlatRows(findProductHistoryVisible(), fpHistorySort, fpHistoryLimit), fpHistorySelected)"
+                @change="historyToggleAll(historyFlatRows(findProductHistoryVisible(), fpHistorySort, fpHistoryLimit), fpHistorySelected, $event.target.checked)" />
+              Select all
+            </label>
+            <button type="button" @click="fpHistorySelected = {}"
+              class="text-gray-500 hover:text-gray-700 dark:hover:text-gray-200">Deselect all</button>
+            <button type="button" x-show="historySelectedCount(fpHistorySelected) > 0" @click="deleteSelectedHistory('fp')"
+              class="ml-auto text-red-500 hover:text-red-600 font-medium"
+              x-text="'🗑 Delete selected (' + historySelectedCount(fpHistorySelected) + ')'"></button>
+          </div>
           <!-- Sortable column header -->
-          <div class="px-4 py-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-gray-400 border-b dark:border-gray-700 bg-gray-50/60 dark:bg-gray-700/30">
-            <div class="w-5 flex-shrink-0"></div>
-            <button type="button" @click="setSort(fpHistorySort, 'date')" class="w-32 text-left uppercase hover:text-gray-600 dark:hover:text-gray-200">
+          <div class="px-4 py-2 flex items-start gap-2 text-[10px] uppercase text-gray-400 border-b dark:border-gray-700 bg-gray-50/60 dark:bg-gray-700/30">
+            <div class="w-6 flex-shrink-0"></div>
+            <button type="button" @click="setSort(fpHistorySort, 'date')" class="w-32 flex-shrink-0 text-left uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200">
               Searched <span x-text="sortIcon(fpHistorySort, 'date')"></span>
             </button>
-            <button type="button" @click="setSort(fpHistorySort, 'vendor')" class="flex-1 text-left uppercase hover:text-gray-600 dark:hover:text-gray-200">
+            <button type="button" @click="setSort(fpHistorySort, 'vendor')" class="flex-1 min-w-0 text-left uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200">
               Result / Vendor <span x-text="sortIcon(fpHistorySort, 'vendor')"></span>
             </button>
-            <button type="button" @click="setSort(fpHistorySort, 'match')" class="w-14 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+            <button type="button" @click="setSort(fpHistorySort, 'match')" class="w-14 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200">
               Match <span x-text="sortIcon(fpHistorySort, 'match')"></span>
             </button>
-            <button type="button" @click="setSort(fpHistorySort, 'our')" class="w-20 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+            <button type="button" @click="setSort(fpHistorySort, 'our')" class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200">
               Our $ <span x-text="sortIcon(fpHistorySort, 'our')"></span>
             </button>
-            <button type="button" @click="setSort(fpHistorySort, 'price')" class="w-20 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
-              Competitor $ <span x-text="sortIcon(fpHistorySort, 'price')"></span>
+            <div class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden" title="Our projected cost = our price × 0.7">Proj $</div>
+            <button type="button" @click="setSort(fpHistorySort, 'price')" class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200" title="Competitor price">
+              Comp $ <span x-text="sortIcon(fpHistorySort, 'price')"></span>
             </button>
+            <div class="w-16 flex-shrink-0 text-center uppercase whitespace-nowrap overflow-hidden" title="Tick after visiting the link and verifying the product &amp; price">Conf?</div>
           </div>
           <div class="divide-y divide-gray-100 dark:divide-gray-700">
             <template x-for="r in historyFlatRows(findProductHistoryVisible(), fpHistorySort, fpHistoryLimit)" :key="r.id">
-              <div class="px-4 py-2 flex items-center gap-2 text-xs">
-                <!-- Delete this single result -->
-                <button type="button" @click="deleteFindProductResult(r.id)" title="Delete this result"
-                  class="w-5 flex-shrink-0 text-gray-300 hover:text-red-500">✕</button>
+              <div class="px-4 py-2 flex items-start gap-2 text-xs">
+                <!-- Delete checkbox (tick rows, then "Delete selected") -->
+                <span class="w-6 flex-shrink-0 flex justify-center pt-0.5">
+                  <input type="checkbox" class="w-4 h-4 cursor-pointer" title="Select this line for deletion"
+                    :checked="!!fpHistorySelected[r.id]" @change="fpHistorySelected[r.id] = $event.target.checked" />
+                </span>
                 <!-- Search context: timestamp + query -->
                 <div class="w-32 flex-shrink-0 leading-tight">
                   <div class="text-gray-400" x-text="new Date(r._searched_at).toLocaleDateString()"></div>
@@ -968,9 +1026,20 @@
                 <!-- Our price -->
                 <span class="w-20 text-right flex-shrink-0 text-orange-600 font-medium"
                   x-text="r.our_price != null ? '$' + Number(r.our_price).toFixed(2) : '—'"></span>
-                <!-- Competitor price (far right) -->
+                <!-- Our projected cost = our price × 0.7 -->
+                <span class="w-20 text-right flex-shrink-0 text-blue-600 dark:text-blue-400 font-medium"
+                  x-text="fmtProjected(r.our_price)"></span>
+                <!-- Competitor price -->
                 <span class="w-20 text-right flex-shrink-0 text-green-600 font-medium"
                   x-text="r.price != null ? '$' + Number(r.price).toFixed(2) : '—'"></span>
+                <!-- Confirmed checkbox + verified date -->
+                <span class="w-16 flex-shrink-0 flex flex-col items-center">
+                  <input type="checkbox" class="w-4 h-4 cursor-pointer"
+                    title="Tick after visiting the link and verifying the product is the same/comparable and the price is correct"
+                    :checked="isConfirmed(r.url)" @change="toggleConfirmed(r.url, $event.target.checked)" />
+                  <span x-show="isConfirmed(r.url)" class="text-[9px] text-gray-400 leading-tight mt-0.5 text-center"
+                    title="Date verified" x-text="confirmedAtLabel(r.url)"></span>
+                </span>
               </div>
             </template>
           </div>
@@ -989,15 +1058,30 @@
       <div class="mb-6">
         <h2 class="text-2xl font-bold mb-1">Beat This Price</h2>
         <p class="text-sm text-gray-500">Pick one or more products from our catalog OR type a free-text description — we'll search the web for cheaper alternatives.</p>
+        <label class="flex items-center gap-2 mt-2 text-sm cursor-pointer">
+          <input type="checkbox" x-model="beatPriceTiedToProduct"
+            @change="notifyTiedToProduct(beatPriceTiedToProduct)" class="w-4 h-4" />
+          <span>This search is tied to a product in our store</span>
+        </label>
+        <div x-show="!beatPriceTiedToProduct" x-cloak class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+          ⚠ No price will be associated to the search results unless the search is tied to a product in our store.
+        </div>
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         <!-- Left: Catalog picker -->
         <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
           <div class="flex items-center justify-between mb-3">
-            <h3 class="font-semibold">Browse Our Products
-              <span class="text-xs text-gray-400 font-normal">(select 1 or more — optional)</span>
-            </h3>
+            <div class="flex items-center gap-3">
+              <h3 class="font-semibold">Browse Our Products
+                <span class="text-xs text-gray-400 font-normal">(select 1 or more — optional)</span>
+              </h3>
+              <button @click="beatPriceSearchCatalog()" type="button"
+                title="Search our catalog by the text in the box below"
+                class="flex-shrink-0 bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-1 rounded-lg text-xs transition">
+                🔍 Search
+              </button>
+            </div>
             <button x-show="beatPriceProductIds.length > 0"
               @click="beatPriceClearProducts()"
               class="text-xs text-gray-500 hover:text-red-500">Clear ✕</button>
@@ -1005,7 +1089,7 @@
           <input x-model="beatPriceCatalogSearch" @input.debounce.300ms="beatPriceSearchCatalog()"
             type="text" placeholder="Search catalog (title, manufacturer, model)..."
             class="w-full border rounded-lg px-3 py-2 text-sm mb-3 dark:bg-gray-700 dark:border-gray-600" />
-          <div class="space-y-1 overflow-y-auto" style="max-height: 576px;">
+          <div class="space-y-1 overflow-y-auto" style="max-height: 720px;">
             <template x-for="p in beatPriceCatalogResults" :key="p.id">
               <div class="rounded" :class="beatPriceProductIds.includes(p.id) ? 'bg-blue-50 dark:bg-blue-900/20' : ''">
                 <label class="flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700">
@@ -1084,13 +1168,19 @@
             </div>
           </div>
           <div class="flex items-center gap-3">
-            <label class="text-sm font-medium"># of Suppliers per product:</label>
+            <label class="text-sm font-medium"># of successful matches:</label>
             <select x-model.number="beatPriceForm.max_results" class="border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600">
               <option value="5">5</option>
               <option value="10">10</option>
               <option value="20">20</option>
             </select>
+            <span class="text-xs text-gray-400">(match ≥ confidence AND within price)</span>
           </div>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" x-model="beatPriceUsaOnly" class="w-4 h-4" />
+            <span>🇺🇸 USA websites only</span>
+            <span class="text-xs text-gray-400">(excludes foreign country domains)</span>
+          </label>
           <!-- Search engine / shopping site selection -->
           <div class="border rounded-lg p-3 dark:border-gray-600">
             <div class="flex items-center justify-between mb-2">
@@ -1132,6 +1222,10 @@
             class="w-full mt-2 bg-red-500 hover:bg-red-600 text-white font-semibold py-2 rounded-lg text-sm transition">
             ⛔ Stop search
           </button>
+          <button @click="scheduleBeatPriceSearch()" type="button"
+            class="w-full mt-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 font-medium py-2 rounded-lg text-sm transition">
+            📅 Schedule this search…
+          </button>
           <div x-show="beatPriceLoading && beatPriceProgress" class="text-xs text-gray-500 truncate" x-text="beatPriceProgress"></div>
         </div>
       </div>
@@ -1159,8 +1253,10 @@
                     x-text="'Our price: $' + Number(g.our_price).toFixed(2)"></span>
                 </div>
               </div>
-              <span class="text-xs text-gray-500 ml-3"
-                x-text="(g.results?.length || 0) + ' supplier' + ((g.results?.length || 0) !== 1 ? 's' : '')"></span>
+              <span class="text-xs ml-3 whitespace-nowrap">
+                <span class="text-green-600 font-medium" x-text="(g.results?.length || 0) + ' successful'"></span><span
+                  x-show="g.potential && g.potential.length" class="text-amber-600" x-text="' · ' + (g.potential?.length || 0) + ' potential'"></span>
+              </span>
             </div>
             <div x-show="g.error" class="px-4 py-3 text-sm text-red-500" x-text="'Error: ' + g.error"></div>
             <div x-show="!g.error && (!g.results || g.results.length === 0)" class="px-4 py-6 text-center text-sm text-gray-400">
@@ -1178,9 +1274,11 @@
                 Conf <span x-text="sortIcon(beatPriceSort, 'confidence')"></span>
               </button>
               <div class="w-[72px] text-right">Our Price</div>
+              <div class="w-[72px] text-right" title="Our projected cost = our price × 0.7">Projected</div>
               <button type="button" @click="setBeatSort('price')" class="w-[84px] text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
                 Vendor Price <span x-text="sortIcon(beatPriceSort, 'price')"></span>
               </button>
+              <div class="w-16 text-center" title="Tick after visiting the link and verifying the product &amp; price">Confirmed</div>
             </div>
             <div x-show="g.results && g.results.length > 0" class="divide-y divide-gray-100 dark:divide-gray-700">
               <template x-for="r in sortedBeatResults(g.results)" :key="r.url">
@@ -1210,6 +1308,9 @@
                   <!-- Our price (immediately left of vendor price) -->
                   <div class="w-[72px] text-right flex-shrink-0 text-sm font-medium text-orange-600"
                        x-text="g.our_price != null ? fmtPrice(g.our_price) : '—'"></div>
+                  <!-- Our projected cost = our price × 0.7 -->
+                  <div class="w-[72px] text-right flex-shrink-0 text-sm font-medium text-blue-600 dark:text-blue-400"
+                       x-text="fmtProjected(g.our_price)"></div>
                   <!-- Vendor price + diff vs our price -->
                   <div class="w-[84px] text-right flex-shrink-0">
                     <div class="font-bold text-sm"
@@ -1220,8 +1321,44 @@
                          :class="(r.price - g.our_price) > 0 ? 'text-green-600' : 'text-red-500'"
                          x-text="fmtDollarDiff(r.price - g.our_price)"></div>
                   </div>
+                  <!-- Confirmed checkbox + verified date -->
+                  <div class="w-16 flex-shrink-0 flex flex-col items-center">
+                    <input type="checkbox" class="w-4 h-4 cursor-pointer"
+                      title="Tick after visiting the link and verifying the product is the same/comparable and the price is correct"
+                      :checked="isConfirmed(r.url)" @change="toggleConfirmed(r.url, $event.target.checked)" />
+                    <div x-show="isConfirmed(r.url)" class="text-[9px] text-gray-400 leading-tight mt-0.5 text-center"
+                      title="Date verified" x-text="confirmedAtLabel(r.url)"></div>
+                  </div>
                 </div>
               </template>
+            </div>
+            <!-- Potential matches for this product (price outside the limit) -->
+            <div x-show="g.potential && g.potential.length > 0" class="border-t border-amber-200 dark:border-amber-900/40">
+              <div class="px-4 py-2 text-xs font-semibold text-amber-600 bg-amber-50/60 dark:bg-amber-900/10">
+                <span x-text="g.potential.length"></span> potential match<span x-show="g.potential.length !== 1">es</span>
+                — match the product but price is outside your limit
+              </div>
+              <div class="divide-y divide-gray-100 dark:divide-gray-700">
+                <template x-for="r in sortedBeatResults(g.potential)" :key="r.url">
+                  <div class="px-4 py-2 flex gap-3 items-center text-sm">
+                    <div class="flex-1 min-w-0">
+                      <div class="font-medium line-clamp-1" x-text="r.title"></div>
+                      <a :href="r.url" target="_blank" rel="noopener" class="text-xs text-blue-500 hover:underline truncate" x-text="r.domain"></a>
+                    </div>
+                    <div class="w-12 text-right flex-shrink-0 text-xs text-gray-400" x-text="r.fuzzy_score != null ? r.fuzzy_score + '%' : '—'"></div>
+                    <div class="w-[72px] text-right flex-shrink-0 text-xs text-gray-400" x-text="g.our_price != null ? fmtPrice(g.our_price) : '—'"></div>
+                    <div class="w-[72px] text-right flex-shrink-0 text-xs text-blue-600 dark:text-blue-400" x-text="fmtProjected(g.our_price)"></div>
+                    <div class="w-[84px] text-right flex-shrink-0 font-bold text-amber-600" x-text="r.price != null ? fmtPrice(r.price) : '—'"></div>
+                    <div class="w-16 flex-shrink-0 flex flex-col items-center">
+                      <input type="checkbox" class="w-4 h-4 cursor-pointer"
+                        title="Tick after visiting the link and verifying the product &amp; price"
+                        :checked="isConfirmed(r.url)" @change="toggleConfirmed(r.url, $event.target.checked)" />
+                      <div x-show="isConfirmed(r.url)" class="text-[9px] text-gray-400 leading-tight mt-0.5 text-center"
+                        title="Date verified" x-text="confirmedAtLabel(r.url)"></div>
+                    </div>
+                  </div>
+                </template>
+              </div>
             </div>
           </div>
         </template>
@@ -1229,7 +1366,10 @@
 
       <!-- Results: flat list for free-text-only path -->
       <div x-show="beatPriceResults.length > 0 && beatPriceGroupedResults.length === 0" class="space-y-3">
-        <h3 class="font-semibold" x-text="`${beatPriceResults.length} supplier${beatPriceResults.length !== 1 ? 's' : ''} found`"></h3>
+        <h3 class="font-semibold">
+          <span class="text-green-600" x-text="`${beatPriceResults.length} successful match${beatPriceResults.length !== 1 ? 'es' : ''}`"></span>
+          <span class="text-sm font-normal text-gray-400">(match ≥ confidence AND within price)</span>
+        </h3>
         <div class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden">
           <!-- Sortable column header -->
           <div class="px-4 py-2 flex gap-3 items-center text-[10px] uppercase tracking-wide text-gray-400 border-b dark:border-gray-700 bg-gray-50/60 dark:bg-gray-700/30">
@@ -1244,6 +1384,7 @@
             <button type="button" @click="setBeatSort('price')" class="w-[84px] text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
               Vendor Price <span x-text="sortIcon(beatPriceSort, 'price')"></span>
             </button>
+            <div class="w-16 text-center" title="Tick after visiting the link and verifying the product &amp; price">Confirmed</div>
           </div>
           <div class="divide-y divide-gray-100 dark:divide-gray-700">
             <template x-for="r in sortedBeatResults(beatPriceResults)" :key="r.url">
@@ -1274,8 +1415,41 @@
                 <div class="w-[84px] text-right flex-shrink-0 font-bold text-sm"
                      :class="r.price == null ? 'text-gray-400 dark:text-gray-500' : 'text-green-600'"
                      x-text="r.price != null ? fmtPrice(r.price) : '—'"></div>
+                <!-- Confirmed checkbox + verified date -->
+                <div class="w-16 flex-shrink-0 flex flex-col items-center self-center">
+                  <input type="checkbox" class="w-4 h-4 cursor-pointer"
+                    title="Tick after visiting the link and verifying the product is the same/comparable and the price is correct"
+                    :checked="isConfirmed(r.url)" @change="toggleConfirmed(r.url, $event.target.checked)" />
+                  <div x-show="isConfirmed(r.url)" class="text-[9px] text-gray-400 leading-tight mt-0.5 text-center"
+                    title="Date verified" x-text="confirmedAtLabel(r.url)"></div>
+                </div>
               </div>
             </template>
+          </div>
+        </div>
+
+        <!-- Potential matches (free-text): matched the product but price is off-limit -->
+        <div x-show="beatPricePotential.length > 0" class="mt-3">
+          <h3 class="font-semibold">
+            <span class="text-amber-600" x-text="`${beatPricePotential.length} potential match${beatPricePotential.length !== 1 ? 'es' : ''}`"></span>
+            <span class="text-sm font-normal text-gray-400">(match the product, but price is outside your limit)</span>
+          </h3>
+          <div class="bg-white dark:bg-gray-800 rounded-xl shadow overflow-hidden border border-amber-200 dark:border-amber-900/40 mt-2">
+            <div class="divide-y divide-gray-100 dark:divide-gray-700">
+              <template x-for="r in sortedBeatResults(beatPricePotential)" :key="r.url">
+                <div class="px-4 py-3 flex gap-3 items-center">
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm font-semibold line-clamp-1" x-text="r.title"></div>
+                    <a :href="r.url" target="_blank" rel="noopener"
+                      class="text-xs text-blue-500 hover:underline truncate" x-text="r.domain"></a>
+                  </div>
+                  <div class="w-14 text-right flex-shrink-0 text-xs font-medium text-gray-500 dark:text-gray-400"
+                       x-text="r.fuzzy_score != null ? r.fuzzy_score + '%' : '—'"></div>
+                  <div class="w-[84px] text-right flex-shrink-0 font-bold text-sm text-amber-600"
+                       x-text="r.price != null ? fmtPrice(r.price) : '—'"></div>
+                </div>
+              </template>
+            </div>
           </div>
         </div>
       </div>
@@ -1298,31 +1472,49 @@
           <!-- One flat, globally-sortable table of every result line (newest first). -->
           <div class="px-4 py-1.5 text-[10px] text-gray-400"
             x-text="'Showing ' + Math.min(historyTotalRows(beatPriceHistoryVisible()), bpHistoryLimit) + ' of ' + historyTotalRows(beatPriceHistoryVisible()) + ' result lines (newest first)'"></div>
+          <!-- Bulk-selection controls -->
+          <div class="px-4 pb-2 flex items-center gap-3 text-xs">
+            <label class="flex items-center gap-1.5 cursor-pointer font-medium text-gray-600 dark:text-gray-300">
+              <input type="checkbox" class="w-4 h-4"
+                :checked="historyAllSelected(historyFlatRows(beatPriceHistoryVisible(), bpHistorySort, bpHistoryLimit), bpHistorySelected)"
+                @change="historyToggleAll(historyFlatRows(beatPriceHistoryVisible(), bpHistorySort, bpHistoryLimit), bpHistorySelected, $event.target.checked)" />
+              Select all
+            </label>
+            <button type="button" @click="bpHistorySelected = {}"
+              class="text-gray-500 hover:text-gray-700 dark:hover:text-gray-200">Deselect all</button>
+            <button type="button" x-show="historySelectedCount(bpHistorySelected) > 0" @click="deleteSelectedHistory('bp')"
+              class="ml-auto text-red-500 hover:text-red-600 font-medium"
+              x-text="'🗑 Delete selected (' + historySelectedCount(bpHistorySelected) + ')'"></button>
+          </div>
           <!-- Sortable column header -->
-          <div class="px-4 py-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-gray-400 border-b dark:border-gray-700 bg-gray-50/60 dark:bg-gray-700/30">
-            <div class="w-5 flex-shrink-0"></div>
-            <button type="button" @click="setSort(bpHistorySort, 'date')" class="w-32 text-left uppercase hover:text-gray-600 dark:hover:text-gray-200">
+          <div class="px-4 py-2 flex items-start gap-2 text-[10px] uppercase text-gray-400 border-b dark:border-gray-700 bg-gray-50/60 dark:bg-gray-700/30">
+            <div class="w-6 flex-shrink-0"></div>
+            <button type="button" @click="setSort(bpHistorySort, 'date')" class="w-32 flex-shrink-0 text-left uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200">
               Searched <span x-text="sortIcon(bpHistorySort, 'date')"></span>
             </button>
-            <button type="button" @click="setSort(bpHistorySort, 'vendor')" class="flex-1 text-left uppercase hover:text-gray-600 dark:hover:text-gray-200">
+            <button type="button" @click="setSort(bpHistorySort, 'vendor')" class="flex-1 min-w-0 text-left uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200">
               Result / Vendor <span x-text="sortIcon(bpHistorySort, 'vendor')"></span>
             </button>
-            <button type="button" @click="setSort(bpHistorySort, 'match')" class="w-14 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+            <button type="button" @click="setSort(bpHistorySort, 'match')" class="w-14 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200">
               Match <span x-text="sortIcon(bpHistorySort, 'match')"></span>
             </button>
-            <button type="button" @click="setSort(bpHistorySort, 'our')" class="w-20 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
+            <button type="button" @click="setSort(bpHistorySort, 'our')" class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200">
               Our $ <span x-text="sortIcon(bpHistorySort, 'our')"></span>
             </button>
-            <button type="button" @click="setSort(bpHistorySort, 'price')" class="w-20 text-right uppercase hover:text-gray-600 dark:hover:text-gray-200">
-              Competitor $ <span x-text="sortIcon(bpHistorySort, 'price')"></span>
+            <div class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden" title="Our projected cost = our price × 0.7">Proj $</div>
+            <button type="button" @click="setSort(bpHistorySort, 'price')" class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200" title="Competitor price">
+              Comp $ <span x-text="sortIcon(bpHistorySort, 'price')"></span>
             </button>
+            <div class="w-16 flex-shrink-0 text-center uppercase whitespace-nowrap overflow-hidden" title="Tick after visiting the link and verifying the product &amp; price">Conf?</div>
           </div>
           <div class="divide-y divide-gray-100 dark:divide-gray-700">
             <template x-for="r in historyFlatRows(beatPriceHistoryVisible(), bpHistorySort, bpHistoryLimit)" :key="r.id">
-              <div class="px-4 py-2 flex items-center gap-2 text-xs">
-                <!-- Delete this single result -->
-                <button type="button" @click="deleteBeatPriceResult(r.id)" title="Delete this result"
-                  class="w-5 flex-shrink-0 text-gray-300 hover:text-red-500">✕</button>
+              <div class="px-4 py-2 flex items-start gap-2 text-xs">
+                <!-- Delete checkbox (tick rows, then "Delete selected") -->
+                <span class="w-6 flex-shrink-0 flex justify-center pt-0.5">
+                  <input type="checkbox" class="w-4 h-4 cursor-pointer" title="Select this line for deletion"
+                    :checked="!!bpHistorySelected[r.id]" @change="bpHistorySelected[r.id] = $event.target.checked" />
+                </span>
                 <!-- Search context: timestamp + description -->
                 <div class="w-32 flex-shrink-0 leading-tight">
                   <div class="text-gray-400" x-text="new Date(r._searched_at).toLocaleDateString()"></div>
@@ -1336,9 +1528,20 @@
                 <!-- Our price -->
                 <span class="w-20 text-right flex-shrink-0 text-orange-600 font-medium"
                   x-text="r.our_price != null ? '$' + Number(r.our_price).toFixed(2) : '—'"></span>
-                <!-- Competitor price (far right) -->
+                <!-- Our projected cost = our price × 0.7 -->
+                <span class="w-20 text-right flex-shrink-0 text-blue-600 dark:text-blue-400 font-medium"
+                  x-text="fmtProjected(r.our_price)"></span>
+                <!-- Competitor price -->
                 <span class="w-20 text-right flex-shrink-0 text-green-600 font-medium"
                   x-text="r.price != null ? '$' + Number(r.price).toFixed(2) : '—'"></span>
+                <!-- Confirmed checkbox + verified date -->
+                <span class="w-16 flex-shrink-0 flex flex-col items-center">
+                  <input type="checkbox" class="w-4 h-4 cursor-pointer"
+                    title="Tick after visiting the link and verifying the product is the same/comparable and the price is correct"
+                    :checked="isConfirmed(r.url)" @change="toggleConfirmed(r.url, $event.target.checked)" />
+                  <span x-show="isConfirmed(r.url)" class="text-[9px] text-gray-400 leading-tight mt-0.5 text-center"
+                    title="Date verified" x-text="confirmedAtLabel(r.url)"></span>
+                </span>
               </div>
             </template>
           </div>
@@ -1959,6 +2162,8 @@
               <option value="competitor_scan">Competitor Scan</option>
               <option value="price_check">Price Check (All Competitors)</option>
               <option value="export">Export</option>
+              <option value="beat_price">Beat This Price Search</option>
+              <option value="find_product">Find Product Search</option>
             </select>
           </div>
           <div>
@@ -1978,17 +2183,175 @@
               :placeholder="newJob.schedule_type === 'daily' ? '09:00' : newJob.schedule_type === 'cron' ? '0 9 * * 1' : newJob.schedule_type === 'interval_minutes' ? '60' : ''"
               class="w-full border rounded px-2 py-1.5 font-mono dark:bg-gray-700 dark:border-gray-600" />
           </div>
-          <div>
+          <div x-show="!isSearchJob()">
             <label class="block text-xs text-gray-500 mb-1">Target (optional)</label>
             <input type="text" x-model="newJob.target" placeholder="all_sources or competitor IDs JSON"
               class="w-full border rounded px-2 py-1.5 dark:bg-gray-700 dark:border-gray-600" />
           </div>
-          <div class="flex items-end">
-            <button @click="createJob()"
-              class="w-full bg-orange-500 hover:bg-orange-600 text-white py-1.5 rounded-lg text-sm font-medium transition">
-              ⏰ Create Job
-            </button>
+        </div>
+
+        <p class="text-[11px] text-gray-400 mt-2">
+          Tip: choose <span class="font-mono">One-time</span> for a single run, or a recurring schedule
+          (daily / weekly / monthly / cron / every N minutes).
+        </p>
+
+        <!-- Beat This Price search parameters -->
+        <div x-show="newJob.job_type === 'beat_price'" x-cloak
+          class="mt-3 border-t dark:border-gray-700 pt-3">
+          <div class="text-xs font-semibold text-gray-500 mb-2">Beat-Price search parameters</div>
+          <textarea x-model="newJob.search.description" rows="2"
+            placeholder="Describe what you need — e.g. 50 pound bag of granulated sugar"
+            class="w-full border rounded px-2 py-1.5 text-sm mb-2 dark:bg-gray-700 dark:border-gray-600 resize-none"></textarea>
+          <div class="grid grid-cols-2 lg:grid-cols-5 gap-2 text-sm">
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-0.5">Min price ($)</label>
+              <input type="number" min="0" x-model="newJob.search.price_min" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-0.5">Max price ($)</label>
+              <input type="number" min="0" x-model="newJob.search.price_max" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-0.5">Confidence (%)</label>
+              <input type="number" min="0" max="100" x-model="newJob.search.confidence" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-0.5"># results</label>
+              <input type="number" min="1" x-model="newJob.search.max_results" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-0.5">Product IDs (opt)</label>
+              <input type="text" x-model="newJob.search.product_ids" placeholder="e.g. 12, 34" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
           </div>
+          <label class="flex items-center gap-2 text-xs text-gray-500 mt-2">
+            <input type="checkbox" x-model="newJob.search.usa_only" class="w-4 h-4" />
+            🇺🇸 USA websites only
+          </label>
+        </div>
+
+        <!-- Find Product search parameters -->
+        <div x-show="newJob.job_type === 'find_product'" x-cloak
+          class="mt-3 border-t dark:border-gray-700 pt-3">
+          <div class="text-xs font-semibold text-gray-500 mb-2">Find-Product search parameters</div>
+          <textarea x-model="newJob.search.query" rows="2"
+            placeholder="Product name / description — e.g. commercial donut fryer 24-count"
+            class="w-full border rounded px-2 py-1.5 text-sm mb-2 dark:bg-gray-700 dark:border-gray-600 resize-none"></textarea>
+          <div class="grid grid-cols-2 lg:grid-cols-5 gap-2 text-sm">
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-0.5">Model number</label>
+              <input type="text" x-model="newJob.search.model_number" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-0.5">Category</label>
+              <input type="text" x-model="newJob.search.category" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-0.5">Min match (%)</label>
+              <input type="number" min="0" max="100" x-model="newJob.search.min_fuzzy_score" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-0.5"># results</label>
+              <input type="number" min="1" x-model="newJob.search.max_results" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-0.5">Product IDs (opt)</label>
+              <input type="text" x-model="newJob.search.product_ids" placeholder="e.g. 12, 34" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+          </div>
+          <label class="flex items-center gap-2 text-xs text-gray-500 mt-2">
+            <input type="checkbox" x-model="newJob.search.search_competitor_sites" class="w-4 h-4" />
+            Also search known competitor sites
+          </label>
+          <label class="flex items-center gap-2 text-xs text-gray-500 mt-1">
+            <input type="checkbox" x-model="newJob.search.usa_only" class="w-4 h-4" />
+            🇺🇸 USA websites only
+          </label>
+        </div>
+
+        <!-- Email alert rule (search jobs only) -->
+        <div x-show="isSearchJob()" x-cloak class="mt-3 border-t dark:border-gray-700 pt-3">
+          <label class="flex items-center gap-2 text-sm font-semibold text-gray-600 dark:text-gray-300">
+            <input type="checkbox" x-model="newJob.notify.enabled" class="w-4 h-4" />
+            📧 Email alert when results match a rule
+          </label>
+          <div x-show="newJob.notify.enabled" class="grid grid-cols-2 lg:grid-cols-4 gap-2 text-sm mt-2">
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-0.5">Price at or below ($)</label>
+              <input type="number" min="0" x-model="newJob.notify.max_price" placeholder="e.g. 27" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-0.5">Match at or above (%)</label>
+              <input type="number" min="0" max="100" x-model="newJob.notify.min_match" placeholder="e.g. 80" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div>
+              <label class="block text-[11px] text-gray-500 mb-0.5">Min matching results</label>
+              <input type="number" min="1" x-model="newJob.notify.min_results" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+            <div class="lg:col-span-1 col-span-2">
+              <label class="block text-[11px] text-gray-500 mb-0.5">Email recipients (comma-separated)</label>
+              <input type="text" x-model="newJob.notify.recipients" placeholder="a@x.com, b@y.com" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+            </div>
+          </div>
+          <p x-show="newJob.notify.enabled" class="text-[11px] text-gray-400 mt-1">
+            Requires SMTP to be configured below. A row matches only when its price and match are both known and pass the thresholds.
+          </p>
+        </div>
+
+        <div class="mt-3">
+          <button @click="createJob()"
+            class="bg-orange-500 hover:bg-orange-600 text-white px-6 py-1.5 rounded-lg text-sm font-medium transition">
+            ⏰ Create Job
+          </button>
+        </div>
+      </div>
+
+      <!-- Email / SMTP settings -->
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 mb-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-semibold text-orange-500">📧 Email Notification Settings</h3>
+          <label class="flex items-center gap-2 text-xs text-gray-500">
+            <input type="checkbox" x-model="emailSettings.enabled" class="w-4 h-4" /> Enabled
+          </label>
+        </div>
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+          <div>
+            <label class="block text-[11px] text-gray-500 mb-0.5">SMTP host</label>
+            <input type="text" x-model="emailSettings.smtp_host" placeholder="smtp.gmail.com" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+          <div>
+            <label class="block text-[11px] text-gray-500 mb-0.5">Port</label>
+            <input type="number" x-model="emailSettings.smtp_port" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+          <div class="flex items-end">
+            <label class="flex items-center gap-2 text-xs text-gray-500 pb-1.5">
+              <input type="checkbox" x-model="emailSettings.smtp_use_tls" class="w-4 h-4" /> Use STARTTLS
+            </label>
+          </div>
+          <div>
+            <label class="block text-[11px] text-gray-500 mb-0.5">From address</label>
+            <input type="text" x-model="emailSettings.from_address" placeholder="alerts@yourco.com" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+          <div>
+            <label class="block text-[11px] text-gray-500 mb-0.5">SMTP user</label>
+            <input type="text" x-model="emailSettings.smtp_user" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+          <div>
+            <label class="block text-[11px] text-gray-500 mb-0.5">
+              SMTP password
+              <span x-show="emailSettings.smtp_password_set" class="text-green-500">(set — leave blank to keep)</span>
+            </label>
+            <input type="password" x-model="emailSettings.smtp_password" placeholder="••••••••" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+          <div class="lg:col-span-2">
+            <label class="block text-[11px] text-gray-500 mb-0.5">Default recipients (comma-separated)</label>
+            <input type="text" x-model="emailSettings.to_addresses" placeholder="ops@yourco.com, buyer@yourco.com" class="w-full border rounded px-2 py-1 dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+        </div>
+        <div class="flex flex-wrap items-end gap-2 mt-3">
+          <button @click="saveEmailSettings()" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium">Save settings</button>
+          <input type="text" x-model="emailTestTo" placeholder="test to (blank = defaults)" class="border rounded px-2 py-1.5 text-sm dark:bg-gray-700 dark:border-gray-600" />
+          <button @click="sendTestEmail()" class="bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 px-4 py-1.5 rounded-lg text-sm font-medium">Send test email</button>
         </div>
       </div>
 

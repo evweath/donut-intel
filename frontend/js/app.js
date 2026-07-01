@@ -91,8 +91,11 @@ function app() {
     findProductCatalogSearch: '',
     findProductCatalogResults: [],
     findProductMaxResults: 10,
+    findProductUsaOnly: true,        // limit to USA websites (default on)
+    findProductTiedToProduct: true,  // search is tied to a catalog product (so "our price" applies)
     findProductResults: [],
     findProductCompResults: [],
+    findProductOurPrice: null,       // our catalog price for the searched product (live results)
     findProductLoading: false,
     findProductSearched: false,
     findProductHistory: [],
@@ -101,6 +104,8 @@ function app() {
     bpHistorySort: { col: '', dir: 'asc' },   // sort for the flat beat-price history table
     fpHistoryLimit: 50,                        // grows by 50 via "Show next 50"
     bpHistoryLimit: 50,
+    fpHistorySelected: {},                     // result id -> true (rows ticked for deletion)
+    bpHistorySelected: {},
     // Batch-boundary pause state (find 10, ask to continue). Pause only kicks in
     // when the user kept the default target (<=10); a larger target runs straight.
     findProductTarget: 10,
@@ -110,12 +115,21 @@ function app() {
     findProductAbort: null,
     findProductActiveParams: null,   // {term, engines[], confidence} shown while searching
 
+    // "Confirmed" checkboxes on search-result rows — user ticks one after visiting
+    // the link and verifying the product/price matches. Keyed by result URL so the
+    // state survives re-renders, sorting, and page switches; persisted to
+    // localStorage so it also survives reloads.
+    confirmedRows: {},
+
     // Beat This Price
     beatPriceForm: { description: '', price_min: '', price_max: '', confidence: '', max_results: 10 },
     beatPriceChars: { size: '', color: '', manufacturer: '', country_of_origin: '', features: '' },
-    beatPriceResults: [],            // Flat list when free-text only
+    beatPriceResults: [],            // Flat list when free-text only (successful matches)
+    beatPricePotential: [],          // Free-text potential matches (match but price off)
     beatPriceGroupedResults: [],     // Per-product groups when products selected
     beatPriceSort: { col: 'price', dir: 'asc' },  // shared sort for results; cheapest-first default
+    beatPriceUsaOnly: true,          // limit to USA websites (default on)
+    beatPriceTiedToProduct: true,    // search is tied to a catalog product (so "our price" applies)
     beatPriceLoading: false,
     beatPriceProductIds: [],         // IDs of selected master products
     beatPriceCatalogSearch: '',
@@ -184,8 +198,20 @@ function app() {
     jobs: [],
     newJob: {
       name: '', job_type: 'source_scan', target: '',
-      schedule_type: 'daily', schedule_value: '09:00', config_json: ''
+      schedule_type: 'daily', schedule_value: '09:00', config_json: '',
+      // Search params (used when job_type is beat_price / find_product)
+      search: {
+        description: '', query: '', model_number: '', category: '',
+        price_min: '', price_max: '', confidence: '', min_fuzzy_score: '',
+        max_results: 10, search_competitor_sites: true, product_ids: '', usa_only: true,
+      },
+      // Email-alert rule fired when results come back matching it
+      notify: { enabled: false, max_price: '', min_match: '', min_results: 1, recipients: '' },
     },
+    // SMTP / email settings (Scheduler page)
+    emailSettings: { enabled: false, smtp_host: '', smtp_port: 587, smtp_use_tls: true,
+      smtp_user: '', smtp_password: '', from_address: '', to_addresses: '', smtp_password_set: false },
+    emailTestTo: '',
 
     // Reports
     reportFrame: '',
@@ -242,6 +268,7 @@ function app() {
         this.loadCompetitors(),
         this.loadJobs(),
         this.loadExportHistory(),
+        this.loadConfirmedRows(),
       ]);
       this.loadSourceSites();
       this.startShopifyConnLog();
@@ -909,6 +936,10 @@ function app() {
     },
 
     async runFindProduct() {
+      if (this.findProductTiedToProduct && !this.findProductIds.length) {
+        this.toast('Select one or more products from the catalog, or uncheck "This search is tied to a product in our store".', 'info');
+        return;
+      }
       if (!this.findProductQuery && !this.findProductIds.length) {
         this.toast('Enter a query or select products from the catalog', 'info');
         return;
@@ -929,6 +960,7 @@ function app() {
         min_fuzzy_score: this.findProductMinFuzzyScore || 0,
         search_competitor_sites: true,
         engines: this.selectedEngines('find_product'),
+        usa_only: this.findProductUsaOnly,
       };
       this.findProductLastPayload = payload;
       // Snapshot the search parameters shown in the "Searching..." window.
@@ -948,6 +980,7 @@ function app() {
           method: 'POST', body: JSON.stringify(payload), signal: this.findProductAbort.signal,
         });
         this.findProductSearchId = res?.search_id || null;
+        this.findProductOurPrice = res?.our_price ?? null;
         this.findProductResults = res?.results || [];
         this.findProductCompResults = res?.competitor_results || [];
         await this.loadFindProductHistory();
@@ -1021,6 +1054,7 @@ function app() {
     beatPriceReset() {
       this.beatPriceProductIds = [];
       this.beatPriceResults = [];
+      this.beatPricePotential = [];
       this.beatPriceGroupedResults = [];
       this.beatPriceForm = { description: '', price_min: '', price_max: '', confidence: '', max_results: 10 };
       this.beatPriceChars = {};
@@ -1031,6 +1065,10 @@ function app() {
     async runBeatPrice() {
       const hasProducts = this.beatPriceProductIds.length > 0;
       const hasDescription = !!(this.beatPriceForm.description || '').trim();
+      if (this.beatPriceTiedToProduct && !hasProducts) {
+        this.toast('Select one or more products from "Browse Our Products", or uncheck "This search is tied to a product in our store".', 'info');
+        return;
+      }
       if (!hasProducts && !hasDescription) {
         this.toast('Select at least one product or enter a description', 'info');
         return;
@@ -1040,6 +1078,7 @@ function app() {
 
       this.beatPriceLoading = true;
       this.beatPriceResults = [];
+      this.beatPricePotential = [];
       this.beatPriceGroupedResults = [];
       this.beatPriceProgress = hasProducts ? `Searching ${this.beatPriceProductIds.length} product(s)...` : '';
 
@@ -1055,6 +1094,7 @@ function app() {
         characteristics: Object.keys(chars).length ? chars : null,
         max_results: target,
         engines: this.selectedEngines('beat_price'),
+        usa_only: this.beatPriceUsaOnly,
       };
       this.beatPriceLastPayload = payload;
       this.beatPriceTarget = target;
@@ -1069,11 +1109,15 @@ function app() {
         this.beatPriceSearchId = res?.search_id || null;
         const stamp = this._beatRunStamp(payload);
         this.beatPriceResults = this._tagBeatResults(res?.results || [], stamp);
+        this.beatPricePotential = this._tagBeatResults(res?.potential || [], stamp);
         this.beatPriceGroupedResults = (res?.groups || []).map(g =>
-          ({ ...g, results: this._tagBeatResults(g.results || [], stamp) }));
+          ({ ...g, results: this._tagBeatResults(g.results || [], stamp),
+             potential: this._tagBeatResults(g.potential || [], stamp) }));
         const total = this.beatPriceTotalResults();
-        if (!total) this.toast('No suppliers found — try broadening the description', 'info');
-        else this.toast(`${total} supplier result${total !== 1 ? 's' : ''} found`, 'success');
+        const pot = this.beatPricePotentialTotal();
+        if (!total && !pot) this.toast('No matches found — try broadening the description or price', 'info');
+        else this.toast(`${total} successful match${total !== 1 ? 'es' : ''}` +
+          (pot ? `, ${pot} potential` : ''), 'success');
         this._maybePauseBeatPrice();
       } catch (e) {
         if (e.name !== 'AbortError') this.toast('Search failed: ' + e.message, 'error');
@@ -1094,16 +1138,24 @@ function app() {
       return set;
     },
 
+    // Successful matches (match% >= floor AND price within limit) across both views.
     beatPriceTotalResults() {
       return (this.beatPriceResults || []).length +
         (this.beatPriceGroupedResults || []).reduce((n, g) => n + (g.results?.length || 0), 0);
     },
 
-    // If we hit the target (10) and pausing is on, ask whether to keep going.
+    // Potential matches (match the product but price is outside the limit / unknown).
+    beatPricePotentialTotal() {
+      return (this.beatPricePotential || []).length +
+        (this.beatPriceGroupedResults || []).reduce((n, g) => n + (g.potential?.length || 0), 0);
+    },
+
+    // If we hit the target number of SUCCESSFUL matches and pausing is on, ask
+    // whether to keep going — and show both successful + potential counts.
     _maybePauseBeatPrice() {
-      const found = this.beatPriceDomains().size;
-      if (this.beatPricePauseEnabled && this.beatPriceSearchId && found >= this.beatPriceTarget) {
-        this.showPausePrompt('beat', { found });
+      const successful = this.beatPriceTotalResults();
+      if (this.beatPricePauseEnabled && this.beatPriceSearchId && successful >= this.beatPriceTarget) {
+        this.showPausePrompt('beat', { found: successful, successful, potential: this.beatPricePotentialTotal() });
       }
     },
 
@@ -1123,8 +1175,10 @@ function app() {
         });
         const stamp = this._beatRunStamp(this.beatPriceLastPayload);
         this.beatPriceResults = [...this.beatPriceResults, ...this._tagBeatResults(res?.results || [], stamp)];
+        this.beatPricePotential = [...this.beatPricePotential, ...this._tagBeatResults(res?.potential || [], stamp)];
         this._mergeBeatGroups((res?.groups || []).map(g =>
-          ({ ...g, results: this._tagBeatResults(g.results || [], stamp) })));
+          ({ ...g, results: this._tagBeatResults(g.results || [], stamp),
+             potential: this._tagBeatResults(g.potential || [], stamp) })));
         this._maybePauseBeatPrice();   // ask again at the next 10
       } catch (e) {
         if (e.name !== 'AbortError') this.toast('Continue failed: ' + e.message, 'error');
@@ -1139,8 +1193,10 @@ function app() {
     _mergeBeatGroups(newGroups) {
       for (const ng of newGroups) {
         const g = this.beatPriceGroupedResults.find(x => x.product_id === ng.product_id);
-        if (g) g.results = [...(g.results || []), ...(ng.results || [])];
-        else this.beatPriceGroupedResults.push(ng);
+        if (g) {
+          g.results = [...(g.results || []), ...(ng.results || [])];
+          g.potential = [...(g.potential || []), ...(ng.potential || [])];
+        } else this.beatPriceGroupedResults.push(ng);
       }
       this.beatPriceGroupedResults = [...this.beatPriceGroupedResults];
     },
@@ -1247,6 +1303,34 @@ function app() {
         await this.api(`/api/search/beat-price/result/${resultId}`, { method: 'DELETE' });
         await this.loadBeatPriceHistory();
       } catch (e) { this.toast('Delete failed: ' + e.message, 'error'); }
+    },
+
+    // --- Bulk selection + deletion for the search-history tables --------------
+    historyAllSelected(rows, selMap) {
+      return rows.length > 0 && rows.every(r => selMap[r.id]);
+    },
+    historyToggleAll(rows, selMap, value) {
+      rows.forEach(r => { if (value) selMap[r.id] = true; else delete selMap[r.id]; });
+    },
+    historySelectedCount(selMap) {
+      return Object.keys(selMap).filter(k => selMap[k]).length;
+    },
+    // kind: 'fp' (find-product) or 'bp' (beat-price)
+    async deleteSelectedHistory(kind) {
+      const selMap = kind === 'fp' ? this.fpHistorySelected : this.bpHistorySelected;
+      const ids = Object.keys(selMap).filter(k => selMap[k]).map(Number);
+      if (!ids.length) return;
+      if (!confirm(`Delete ${ids.length} selected result line${ids.length !== 1 ? 's' : ''}?`)) return;
+      const base = kind === 'fp'
+        ? '/api/search/find-product/result/'
+        : '/api/search/beat-price/result/';
+      try {
+        await Promise.all(ids.map(id => this.api(base + id, { method: 'DELETE' })));
+      } catch (e) {
+        this.toast('Delete failed: ' + e.message, 'error');
+      }
+      if (kind === 'fp') { this.fpHistorySelected = {}; await this.loadFindProductHistory(); }
+      else { this.bpHistorySelected = {}; await this.loadBeatPriceHistory(); }
     },
 
     // -----------------------------------------------------------------------
@@ -1706,15 +1790,137 @@ function app() {
       } catch {}
     },
 
+    // Default newJob shape — reused on reset.
+    _blankJob() {
+      return {
+        name: '', job_type: 'source_scan', target: '', schedule_type: 'daily',
+        schedule_value: '09:00', config_json: '',
+        search: { description: '', query: '', model_number: '', category: '',
+          price_min: '', price_max: '', confidence: '', min_fuzzy_score: '',
+          max_results: 10, search_competitor_sites: true, product_ids: '', usa_only: true },
+        notify: { enabled: false, max_price: '', min_match: '', min_results: 1, recipients: '' },
+      };
+    },
+
+    // True for the two search job types that carry search params + notify rules.
+    isSearchJob() {
+      return this.newJob.job_type === 'beat_price' || this.newJob.job_type === 'find_product';
+    },
+
+    // Build the request payload, packing search + notify into config_json for
+    // beat_price / find_product jobs.
+    _buildJobPayload() {
+      const j = this.newJob;
+      const num = v => (v === '' || v == null) ? null : Number(v);
+      const ids = (j.search.product_ids || '').split(',').map(s => s.trim()).filter(Boolean).map(Number);
+      const recipients = (j.notify.recipients || '').split(/[,\n;]/).map(s => s.trim()).filter(Boolean);
+      const base = { name: j.name, job_type: j.job_type, target: j.target || null,
+        schedule_type: j.schedule_type, schedule_value: j.schedule_value };
+      if (!this.isSearchJob()) return { ...base, config_json: j.config_json || null };
+
+      let search;
+      if (j.job_type === 'beat_price') {
+        search = { description: j.search.description || null, product_ids: ids.length ? ids : null,
+          price_min: num(j.search.price_min), price_max: num(j.search.price_max),
+          min_confidence: num(j.search.confidence), max_results: Number(j.search.max_results) || 10,
+          usa_only: !!j.search.usa_only };
+      } else {
+        search = { query: j.search.query || null, product_ids: ids.length ? ids : null,
+          model_number: j.search.model_number || null, category: j.search.category || null,
+          min_fuzzy_score: Number(j.search.min_fuzzy_score) || 0,
+          search_competitor_sites: !!j.search.search_competitor_sites,
+          max_results: Number(j.search.max_results) || 10, usa_only: !!j.search.usa_only };
+      }
+      const notify = { enabled: !!j.notify.enabled, max_price: num(j.notify.max_price),
+        min_match: num(j.notify.min_match), min_results: Number(j.notify.min_results) || 1,
+        recipients };
+      return { ...base, config_json: JSON.stringify({ search, notify }) };
+    },
+
     async createJob() {
       try {
+        const payload = this._buildJobPayload();
         const r = await this.api('/api/scheduler/jobs', {
-          method: 'POST', body: JSON.stringify(this.newJob),
+          method: 'POST', body: JSON.stringify(payload),
         });
         this.toast(`Job "${this.newJob.name}" scheduled (next: ${r.next_run || 'N/A'})`, 'success');
-        this.newJob = { name: '', job_type: 'source_scan', target: '', schedule_type: 'daily', schedule_value: '09:00', config_json: '' };
+        this.newJob = this._blankJob();
         await this.loadJobs();
       } catch (e) { this.toast('Failed to create job: ' + e.message, 'error'); }
+    },
+
+    // ---- Email / SMTP settings (Scheduler page) ----
+    async loadEmailSettings() {
+      try {
+        const s = await this.api('/api/settings/email');
+        this.emailSettings = { ...this.emailSettings, ...s,
+          to_addresses: Array.isArray(s.to_addresses) ? s.to_addresses.join(', ') : (s.to_addresses || ''),
+          smtp_password: '' };
+      } catch {}
+    },
+    async saveEmailSettings() {
+      try {
+        const e = this.emailSettings;
+        const body = {
+          enabled: !!e.enabled, smtp_host: e.smtp_host || '', smtp_port: Number(e.smtp_port) || 587,
+          smtp_use_tls: !!e.smtp_use_tls, smtp_user: e.smtp_user || '', from_address: e.from_address || '',
+          to_addresses: (e.to_addresses || '').split(/[,\n;]/).map(s => s.trim()).filter(Boolean),
+          smtp_password: e.smtp_password || null,
+        };
+        await this.api('/api/settings/email', { method: 'PUT', body: JSON.stringify(body) });
+        this.toast('Email settings saved', 'success');
+        await this.loadEmailSettings();
+      } catch (err) { this.toast('Failed to save email settings: ' + err.message, 'error'); }
+    },
+    async sendTestEmail() {
+      try {
+        const recipients = (this.emailTestTo || '').split(/[,\n;]/).map(s => s.trim()).filter(Boolean);
+        const r = await this.api('/api/notify/test', { method: 'POST',
+          body: JSON.stringify({ recipients: recipients.length ? recipients : null }) });
+        this.toast(r.ok ? 'Test email sent ✓' : ('Test failed: ' + r.detail), r.ok ? 'success' : 'error');
+      } catch (e) { this.toast('Test failed: ' + e.message, 'error'); }
+    },
+
+    // ---- "Schedule this search" from the Beat Price / Find Product pages ----
+    scheduleBeatPriceSearch() {
+      if (this.beatPriceTiedToProduct && !this.beatPriceProductIds.length) {
+        this.toast('Select one or more products from "Browse Our Products", or uncheck "This search is tied to a product in our store".', 'info');
+        return;
+      }
+      const j = this._blankJob();
+      j.job_type = 'beat_price';
+      j.name = 'Beat price: ' + ((this.beatPriceForm.description || '').slice(0, 40) || 'catalog');
+      j.search.description = this.beatPriceForm.description || '';
+      j.search.price_min = this.beatPriceForm.price_min || '';
+      j.search.price_max = this.beatPriceForm.price_max || '';
+      j.search.confidence = this.beatPriceForm.confidence || '';
+      j.search.max_results = this.beatPriceForm.max_results || 10;
+      j.search.product_ids = (this.beatPriceProductIds || []).join(', ');
+      j.search.usa_only = this.beatPriceUsaOnly;
+      this.newJob = j;
+      this.currentView = 'scheduler';
+      this.loadJobs(); this.loadEmailSettings();
+      this.toast('Search loaded into the scheduler — set a schedule and (optionally) an alert.', 'info');
+    },
+    scheduleFindProductSearch() {
+      if (this.findProductTiedToProduct && !this.findProductIds.length) {
+        this.toast('Select one or more products from the catalog, or uncheck "This search is tied to a product in our store".', 'info');
+        return;
+      }
+      const j = this._blankJob();
+      j.job_type = 'find_product';
+      j.name = 'Find product: ' + ((this.findProductQuery || '').slice(0, 40) || 'catalog');
+      j.search.query = this.findProductQuery || '';
+      j.search.model_number = this.findProductModelNumber || '';
+      j.search.category = this.findProductCategory || '';
+      j.search.min_fuzzy_score = this.findProductMinFuzzyScore || '';
+      j.search.max_results = this.findProductMaxResults || 10;
+      j.search.product_ids = (this.findProductIds || []).join(', ');
+      j.search.usa_only = this.findProductUsaOnly;
+      this.newJob = j;
+      this.currentView = 'scheduler';
+      this.loadJobs(); this.loadEmailSettings();
+      this.toast('Search loaded into the scheduler — set a schedule and (optionally) an alert.', 'info');
     },
 
     async deleteJob(id) {
@@ -2187,6 +2393,51 @@ function app() {
     // Utilities
     // -----------------------------------------------------------------------
     fmtPrice(v) { return v != null ? `$${Number(v).toFixed(2)}` : '—'; },
+
+    // "Tied to a product in our store" checkbox — warn when unticked, since an
+    // untied (free-text) search has no catalog product and so gets no "our price".
+    notifyTiedToProduct(checked) {
+      if (!checked) {
+        this.toast('No price will be associated to the search results unless the search is tied to a product in our store.', 'info');
+      }
+    },
+
+    // Our projected cost = our retail price × 0.7 (the price we show on our sites).
+    fmtProjected(ourPrice) {
+      return ourPrice != null ? `$${(Number(ourPrice) * 0.7).toFixed(2)}` : '—';
+    },
+
+    // --- "Confirmed" per-result checkboxes (keyed by URL, saved server-side) ---
+    // confirmedRows maps url -> verified_at ISO timestamp; a key exists only while
+    // the result is confirmed.
+    isConfirmed(url) { return !!this.confirmedRows[url]; },
+    confirmedAtLabel(url) {
+      const ts = this.confirmedRows[url];
+      return ts ? new Date(ts).toLocaleDateString() : '';
+    },
+    async toggleConfirmed(url, checked) {
+      if (!url) return;
+      // Optimistic update, then reconcile with the server's authoritative timestamp.
+      const prev = this.confirmedRows[url];
+      if (checked) this.confirmedRows[url] = new Date().toISOString();
+      else delete this.confirmedRows[url];
+      try {
+        const res = await this.api('/api/confirmations', {
+          method: 'POST', body: JSON.stringify({ url, confirmed: checked }),
+        });
+        if (checked && res?.verified_at) this.confirmedRows[url] = res.verified_at;
+      } catch (e) {
+        if (prev !== undefined) this.confirmedRows[url] = prev; else delete this.confirmedRows[url];
+        this.toast('Could not save confirmation: ' + e.message, 'error');
+      }
+    },
+    async loadConfirmedRows() {
+      try {
+        const res = await this.api('/api/confirmations');
+        this.confirmedRows = res?.confirmations || {};
+      } catch { this.confirmedRows = {}; }
+    },
+
     fmtDate(iso) { return iso ? new Date(iso).toLocaleString() : '—'; },
     fmtDateShort(iso) { return iso ? new Date(iso).toLocaleDateString() : '—'; },
     statusColor(s) {

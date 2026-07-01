@@ -79,6 +79,10 @@ SEARCH_ENGINES = (
     # Shopping surface). Labelled with both so neither name looks "missing".
     {'key': 'yahoo_shopping', 'label': 'Walmart (Yahoo Shopping)', 'group': 'shopping'},
     {'key': 'ddg_shopping',   'label': 'DuckDuckGo Shopping',  'group': 'shopping'},
+    # Retailer-specific shopping sites — searched via the site's own search page.
+    {'key': 'costco',         'label': 'Costco',               'group': 'shopping'},
+    {'key': 'samsclub',       'label': "Sam's Club",           'group': 'shopping'},
+    {'key': 'ubereats',       'label': 'Uber Eats',            'group': 'shopping'},
 )
 ALL_ENGINE_KEYS = tuple(e['key'] for e in SEARCH_ENGINES)
 
@@ -95,7 +99,8 @@ PAGE_ENGINES = {
 # Google Shopping through a dedicated higher-volume call (_google_shopping_search)
 # and route these remaining shopping engines through multi_engine_search so they
 # run only when selected.
-NON_GOOGLE_SHOPPING = ('bing_shopping', 'yahoo_shopping', 'ddg_shopping')
+NON_GOOGLE_SHOPPING = ('bing_shopping', 'yahoo_shopping', 'ddg_shopping',
+                       'costco', 'samsclub', 'ubereats')
 
 
 def narrow_engines(engine_list, selected):

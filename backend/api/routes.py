@@ -65,6 +65,7 @@ from backend.database.models import (
     ProductOption,
     ProductSource,
     ProductTag,
+    ResultConfirmation,
     ScheduledJob,
     ScanSession,
 )
@@ -1477,6 +1478,61 @@ def toggle_job(job_id: int, active: bool = True):
 
 
 # ---------------------------------------------------------------------------
+# Email notification settings + test (used by scheduled-search alerts)
+# ---------------------------------------------------------------------------
+class EmailSettingsRequest(BaseModel):
+    enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_use_tls: bool = True
+    smtp_user: str = ""
+    smtp_password: Optional[str] = None   # None/"" = keep existing password
+    from_address: str = ""
+    to_addresses: List[str] = []
+
+
+@router.get("/api/settings/email")
+def get_email_settings():
+    from backend.notify.mailer import email_settings
+    s = email_settings()
+    s.pop("smtp_password", None)
+    s["smtp_password_set"] = bool(config.get("email", "smtp_password", default=""))
+    return s
+
+
+@router.put("/api/settings/email")
+def update_email_settings(req: EmailSettingsRequest):
+    config.set("email", "enabled", req.enabled)
+    config.set("email", "smtp_host", req.smtp_host)
+    config.set("email", "smtp_port", req.smtp_port)
+    config.set("email", "smtp_use_tls", req.smtp_use_tls)
+    config.set("email", "smtp_user", req.smtp_user)
+    config.set("email", "from_address", req.from_address)
+    config.set("email", "to_addresses", req.to_addresses)
+    # Only overwrite the stored password when a new one is supplied.
+    if req.smtp_password:
+        config.set("email", "smtp_password", req.smtp_password)
+    return {"status": "saved"}
+
+
+class TestEmailRequest(BaseModel):
+    recipients: Optional[List[str]] = None
+
+
+@router.post("/api/notify/test")
+def send_test_email(req: TestEmailRequest):
+    from backend.notify.mailer import email_settings, send_email
+    recipients = req.recipients or email_settings()["to_addresses"]
+    ok, detail = send_email(
+        "Donut Intel — test notification",
+        "This is a test email from the Donut Intel scheduler. If you received it, "
+        "email notifications are configured correctly.",
+        recipients,
+    )
+    return {"ok": ok, "detail": detail}
+
+
+# ---------------------------------------------------------------------------
 # Export (F39-F42)
 # ---------------------------------------------------------------------------
 
@@ -1955,6 +2011,52 @@ def list_search_engines():
     }
 
 
+# ---------------------------------------------------------------------------
+# Confirmed search results — the "Confirmed" checkbox on the product-search
+# pages. A row exists only while a result is confirmed; verified_at is the day
+# the user ticked it.
+# ---------------------------------------------------------------------------
+@router.get("/api/confirmations")
+def list_confirmations(db: Session = Depends(get_db_session)):
+    """Return all confirmed result URLs and when they were verified, as a
+    {url: verified_at_iso} map for the frontend to render checkboxes + dates."""
+    rows = db.query(ResultConfirmation).all()
+    return {
+        "confirmations": {
+            r.url: (r.verified_at.isoformat() if r.verified_at else None)
+            for r in rows
+        }
+    }
+
+
+class ConfirmationRequest(BaseModel):
+    url: str
+    confirmed: bool
+
+
+@router.post("/api/confirmations")
+def set_confirmation(req: ConfirmationRequest, db: Session = Depends(get_db_session)):
+    """Confirm (upsert with a fresh verified_at) or un-confirm (delete) a result URL."""
+    url = (req.url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="url is required")
+
+    existing = db.query(ResultConfirmation).filter(ResultConfirmation.url == url).first()
+    if req.confirmed:
+        if existing:
+            existing.verified_at = datetime.utcnow()
+        else:
+            existing = ResultConfirmation(url=url, verified_at=datetime.utcnow())
+            db.add(existing)
+        db.commit()
+        return {"url": url, "confirmed": True, "verified_at": existing.verified_at.isoformat()}
+    else:
+        if existing:
+            db.delete(existing)
+            db.commit()
+        return {"url": url, "confirmed": False, "verified_at": None}
+
+
 class FindProductRequest(BaseModel):
     product_ids: Optional[List[int]] = None
     query: Optional[str] = None
@@ -1964,6 +2066,7 @@ class FindProductRequest(BaseModel):
     min_fuzzy_score: int = 0          # 0 = no filter on competitor site results
     search_competitor_sites: bool = True
     engines: Optional[List[str]] = None   # restrict to these engine keys; None = all
+    usa_only: bool = True   # limit web results to USA (non-foreign-ccTLD) websites
 
 
 def _find_product_context(req: "FindProductRequest", db: Session) -> dict:
@@ -1972,6 +2075,7 @@ def _find_product_context(req: "FindProductRequest", db: Session) -> dict:
     parts: List[str] = []
     model_number: str = req.model_number or ''
     category: str = req.category or ''
+    our_price = None   # our catalog price for the (first) searched product
 
     if req.product_ids:
         prods = (
@@ -1979,6 +2083,8 @@ def _find_product_context(req: "FindProductRequest", db: Session) -> dict:
             .filter(Product.id.in_(req.product_ids), Product.is_active == True)
             .all()
         )
+        # Keep catalog order so "first product" is stable for our_price.
+        prods.sort(key=lambda p: req.product_ids.index(p.id) if p.id in req.product_ids else 0)
         for p in prods:
             # Prefer the user-curated search term; fall back to the title.
             term = (p.product_search_term or p.canonical_title or "").strip()
@@ -1988,6 +2094,8 @@ def _find_product_context(req: "FindProductRequest", db: Session) -> dict:
                 model_number = p.model_number
             if not category and p.category:
                 category = p.category
+            if our_price is None and p.price_canonical is not None:
+                our_price = p.price_canonical
     if req.query:
         parts.append(req.query)
     if not parts:
@@ -2025,6 +2133,7 @@ def _find_product_context(req: "FindProductRequest", db: Session) -> dict:
         "competitor_domain_map": competitor_domain_map,
         "competitor_domains": competitor_domains,
         "own_domains": own_domains,
+        "our_price": our_price,
     }
 
 
@@ -2075,6 +2184,12 @@ async def search_find_product(req: FindProductRequest, db: Session = Depends(get
     else:
         web_results = await web_coro
         comp_results = []
+
+    # "USA websites only" filter (default on) — applied to open-web discovery.
+    # Curated competitor-site results are left as-is (the user chose those sites).
+    if req.usa_only:
+        from backend.search.core.parse import filter_usa_domains
+        web_results = filter_usa_domains(web_results)
 
     # Persist search session + results
     search_rec = FindProductSearch(
@@ -2129,6 +2244,7 @@ async def search_find_product(req: FindProductRequest, db: Session = Depends(get
         "query": product_name,
         "model_number": model_number,
         "category": category,
+        "our_price": ctx["our_price"],
         "results": web_results,
         "competitor_results": comp_results,
     }
@@ -2165,6 +2281,10 @@ async def search_find_product_continue(req: FindProductContinueRequest, db: Sess
         exclude_domains=exclude,
     )
 
+    if req.usa_only:
+        from backend.search.core.parse import filter_usa_domains
+        web_results = filter_usa_domains(web_results)
+
     for r in web_results:
         domain = r.get("domain", "")
         db.add(FindProductResult(
@@ -2183,6 +2303,7 @@ async def search_find_product_continue(req: FindProductContinueRequest, db: Sess
 
     return {
         "search_id": search_rec.id,
+        "our_price": ctx["our_price"],
         "results": web_results,
         "competitor_results": [],
     }
@@ -2265,6 +2386,7 @@ class BeatPriceRequest(BaseModel):
     max_results: int = 10
     engines: Optional[List[str]] = None   # restrict to these engine keys; None = all
     min_confidence: Optional[float] = None  # user-set minimum fuzzy-match % (default 30 floor)
+    usa_only: bool = True   # limit results to USA (non-foreign-ccTLD) websites
 
 
 def _parse_price(val) -> Optional[float]:
@@ -2329,7 +2451,7 @@ async def _run_beat_price_search(req: "BeatPriceRequest", db: Session, search_re
                 if pid in active_pids
             ]
             try:
-                results, per_pattern_best = await find_suppliers(
+                results, potential, per_pattern_best = await find_suppliers(
                     description=desc,
                     model_number=req.model_number or product.model_number,
                     category=req.category or product.category,
@@ -2341,12 +2463,14 @@ async def _run_beat_price_search(req: "BeatPriceRequest", db: Session, search_re
                     selected_engines=coerce_selected_engines(req.engines),
                     exclude_domains=exclude,
                     min_confidence=req.min_confidence,
+                    usa_only=req.usa_only,
                 )
             except Exception as exc:
                 groups.append({
                     "product_id": product.id, "title": product.canonical_title,
                     "our_price": product.price_canonical, "manufacturer": product.manufacturer,
-                    "model_number": product.model_number, "results": [], "error": str(exc),
+                    "model_number": product.model_number, "results": [], "potential": [],
+                    "successful_count": 0, "potential_count": 0, "error": str(exc),
                 })
                 continue
 
@@ -2383,10 +2507,14 @@ async def _run_beat_price_search(req: "BeatPriceRequest", db: Session, search_re
 
             for r in results:
                 r["price"] = _parse_price(r.get("price"))
+            for r in potential:
+                r["price"] = _parse_price(r.get("price"))
             groups.append({
                 "product_id": product.id, "title": product.canonical_title,
                 "our_price": product.price_canonical, "manufacturer": product.manufacturer,
-                "model_number": product.model_number, "results": results, "error": None,
+                "model_number": product.model_number, "results": results,
+                "potential": potential, "successful_count": len(results),
+                "potential_count": len(potential), "error": None,
             })
 
         db.commit()
@@ -2396,7 +2524,7 @@ async def _run_beat_price_search(req: "BeatPriceRequest", db: Session, search_re
     # decoration, no "buy ... supplier wholesale price" wrapper, no appended
     # characteristics/price text. The query string sent to the engines must equal
     # the user's input verbatim (see exact_query in find_suppliers).
-    results, _ = await find_suppliers(
+    results, potential, _ = await find_suppliers(
         description=req.description,
         model_number=req.model_number,
         category=req.category,
@@ -2409,6 +2537,7 @@ async def _run_beat_price_search(req: "BeatPriceRequest", db: Session, search_re
         selected_engines=coerce_selected_engines(req.engines),
         exclude_domains=exclude,
         min_confidence=req.min_confidence,
+        usa_only=req.usa_only,
     )
     for r in results:
         r["price"] = _parse_price(r.get("price"))
@@ -2419,8 +2548,12 @@ async def _run_beat_price_search(req: "BeatPriceRequest", db: Session, search_re
             model_number=r.get("model_number"), image_url=r.get("image") or None,
             fuzzy_score=r.get("fuzzy_score"),
         ))
+    for r in potential:
+        r["price"] = _parse_price(r.get("price"))
     db.commit()
-    return {"search_id": search_rec.id, "results": results, "groups": []}
+    return {"search_id": search_rec.id, "results": results, "groups": [],
+            "potential": potential, "successful_count": len(results),
+            "potential_count": len(potential)}
 
 
 @router.post("/api/search/beat-price")

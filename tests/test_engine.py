@@ -95,7 +95,7 @@ async def test_find_suppliers_price_preserved_from_shopping_result():
     with patch('backend.search.pages.beat_price.multi_engine_search', side_effect=fake_multi_engine_search), \
          patch('backend.search.pages.beat_price._google_shopping_search', new_callable=AsyncMock, return_value=[]), \
          patch('backend.search.pages.beat_price._image_search', new_callable=AsyncMock, return_value=[]):
-        results, _ = await find_suppliers(
+        results, _potential, _ = await find_suppliers(
             description='Acme Widget Model X100',
             max_results=5,
         )
@@ -198,7 +198,7 @@ async def test_find_suppliers_returns_results_when_shopping_has_prices():
     with patch('backend.search.pages.beat_price.multi_engine_search', side_effect=fake_multi_engine_search), \
          patch('backend.search.pages.beat_price._google_shopping_search', new_callable=AsyncMock, return_value=[]), \
          patch('backend.search.pages.beat_price._image_search', new_callable=AsyncMock, return_value=[]):
-        results, _ = await find_suppliers(
+        results, _potential, _ = await find_suppliers(
             description='Acme Widget Model X100',
             max_results=5,
         )
@@ -301,7 +301,7 @@ async def test_find_suppliers_min_confidence_filters_low_scores():
     with patch('backend.search.pages.beat_price.multi_engine_search', side_effect=fake_multi_engine_search), \
          patch('backend.search.pages.beat_price._google_shopping_search', new_callable=AsyncMock, return_value=[]), \
          patch('backend.search.pages.beat_price._image_search', new_callable=AsyncMock, return_value=[]):
-        results, _ = await find_suppliers(
+        results, _potential, _ = await find_suppliers(
             description=target, max_results=10, min_confidence=80,
         )
 

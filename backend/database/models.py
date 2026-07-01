@@ -525,3 +525,14 @@ class BeatPricePatternStats(Base):
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
 
+class ResultConfirmation(Base):
+    """User-verified search results. A row exists only while a result is confirmed
+    (the "Confirmed" checkbox on the product-search pages). Keyed by the result's
+    URL so the same link reads as confirmed wherever it appears across pages.
+    `verified_at` is the day/time the user ticked it."""
+    __tablename__ = "result_confirmations"
+
+    url = Column(Text, primary_key=True)
+    verified_at = Column(DateTime, default=func.now(), nullable=False)
+
+

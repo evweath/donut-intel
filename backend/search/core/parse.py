@@ -35,6 +35,41 @@ def _domain(url: str) -> str:
         return ''
 
 
+# Country-code TLDs treated as NON-US (used by the "USA websites only" filter).
+# Deliberately EXCLUDES generically-used ccTLDs (.co, .io, .ai, .me, .tv, .cc) to
+# avoid dropping US sites that use them. '.us' is always US.
+_FOREIGN_CCTLDS = frozenset({
+    'uk', 'gb', 'ca', 'au', 'nz', 'ie', 'de', 'fr', 'es', 'it', 'nl', 'be', 'ch',
+    'at', 'se', 'no', 'fi', 'dk', 'is', 'pt', 'gr', 'lu', 'pl', 'cz', 'sk', 'hu',
+    'ro', 'bg', 'hr', 'si', 'rs', 'lt', 'lv', 'ee', 'ru', 'ua', 'by', 'tr', 'in',
+    'pk', 'bd', 'lk', 'np', 'cn', 'jp', 'kr', 'hk', 'tw', 'sg', 'my', 'th', 'id',
+    'ph', 'vn', 'kh', 'mx', 'br', 'ar', 'cl', 'pe', 'uy', 'py', 've', 'ec', 'bo',
+    'za', 'ng', 'ke', 'gh', 'eg', 'ma', 'dz', 'tn', 'ae', 'sa', 'qa', 'kw', 'bh',
+    'om', 'jo', 'lb', 'il', 'ir', 'iq',
+})
+
+
+def is_usa_domain(domain: str) -> bool:
+    """Heuristic: True unless the domain uses a non-US country-code TLD.
+
+    Offline and TLD-based — a generic TLD (.com/.net/.org/.us/...) passes; a
+    foreign ccTLD (.co.uk, .ca, .com.au, .de, .cn) is rejected. A '.com' hosted
+    abroad still passes (no geo-IP lookup). See "USA websites only" search filter.
+    """
+    d = (domain or '').strip().lower().rstrip('.')
+    if not d:
+        return False
+    if d.endswith('.us'):
+        return True
+    tld = d.rsplit('.', 1)[-1]
+    return tld not in _FOREIGN_CCTLDS
+
+
+def filter_usa_domains(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop result rows whose 'domain' is a non-US country-code TLD."""
+    return [r for r in results if is_usa_domain(r.get('domain') or '')]
+
+
 def _is_homepage(url: str) -> bool:
     """Return True if the URL is a bare domain homepage with no meaningful path."""
     try:

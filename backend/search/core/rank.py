@@ -13,10 +13,13 @@ from backend.search.core.constants import _NOISE_DOMAINS
 from backend.search.core.engines import (
     _bing_search,
     _bing_shopping_search,
+    _costco_shopping_search,
     _duckduckgo_shopping_search,
     _google_search,
     _google_shopping_search,
+    _samsclub_shopping_search,
     _text_search,
+    _ubereats_shopping_search,
     _yahoo_search,
     _yahoo_shopping_search,
 )
@@ -80,7 +83,8 @@ async def multi_engine_search(
     ranked by cross-engine agreement.
     """
     if engines is None:
-        engines = ['ddg', 'bing', 'google', 'yahoo', 'shopping', 'bing_shopping', 'yahoo_shopping', 'ddg_shopping']
+        engines = ['ddg', 'bing', 'google', 'yahoo', 'shopping', 'bing_shopping',
+                   'yahoo_shopping', 'ddg_shopping', 'costco', 'samsclub', 'ubereats']
     exclude = exclude_domains or set()
     fetch = max_results * 3  # over-fetch to account for filtering
 
@@ -123,6 +127,15 @@ async def multi_engine_search(
     if 'ddg_shopping' in engines:
         shopping_indices.append(len(tasks))
         tasks.append(_logged('ddg_shopping', _duckduckgo_shopping_search(query, max_results=fetch)))
+    if 'costco' in engines:
+        shopping_indices.append(len(tasks))
+        tasks.append(_logged('costco', _costco_shopping_search(query, max_results=fetch)))
+    if 'samsclub' in engines:
+        shopping_indices.append(len(tasks))
+        tasks.append(_logged('samsclub', _samsclub_shopping_search(query, max_results=fetch)))
+    if 'ubereats' in engines:
+        shopping_indices.append(len(tasks))
+        tasks.append(_logged('ubereats', _ubereats_shopping_search(query, max_results=fetch)))
 
     raw = await asyncio.gather(*tasks, return_exceptions=True)
 

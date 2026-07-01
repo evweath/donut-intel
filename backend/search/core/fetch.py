@@ -61,6 +61,38 @@ async def _curl_get(url: str, extra_headers: Optional[List[str]] = None, timeout
     return ''
 
 
+async def _curl_post(url: str, json_body: Optional[dict] = None,
+                     extra_headers: Optional[List[str]] = None, timeout: int = 30,
+                     retries: int = 2) -> str:
+    """POST a JSON body and return the response text (''  on failure).
+
+    Same in-process primp client as ``_curl_get`` (URL/body not visible in the
+    process table). Used for API calls like the Bright Data Web Unlocker request
+    endpoint. Transient connection failures retry with short backoff; HTTP error
+    statuses return their body normally.
+    """
+    import primp
+    headers = {'Accept': '*/*'}
+    for h in (extra_headers or []):
+        if ': ' in h:
+            k, v = h.split(': ', 1)
+            headers[k] = v
+    retries = max(1, retries)
+    last_exc: Optional[BaseException] = None
+    for attempt in range(retries):
+        try:
+            async with primp.AsyncClient(impersonate='random', timeout=timeout) as client:
+                r = await asyncio.wait_for(
+                    client.post(url, headers=headers, json=json_body or {}), timeout + 2)
+                return r.text
+        except Exception as exc:
+            last_exc = exc
+            if attempt + 1 < retries:
+                await asyncio.sleep(_FETCH_BACKOFF_BASE * (2 ** attempt))
+    logger.debug("primp_post failed for %s after %d attempts: %s", url, retries, last_exc)
+    return ''
+
+
 async def check_internet_reachable(timeout: int = 6) -> bool:
     """Quick probe to tell 'network down' apart from 'genuinely no results'.
 

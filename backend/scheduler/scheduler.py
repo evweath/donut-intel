@@ -127,6 +127,7 @@ async def _execute_job(job_id: int):
         job.last_run_at = datetime.utcnow()
         job.run_count = (job.run_count or 0) + 1
         job_type = job.job_type
+        job_name = job.name
         target = job.target
         config_data = {}
         if job.config_json:
@@ -136,6 +137,7 @@ async def _execute_job(job_id: int):
                 pass
 
     logger.info(f"Executing scheduled job: {job_id} type={job_type}")
+    status_override: Optional[str] = None
 
     try:
         if job_type == "source_scan":
@@ -155,7 +157,6 @@ async def _execute_job(job_id: int):
 
         elif job_type == "price_check":
             from backend.competitor.scraper import run_competitor_scan
-            from backend.database.db import session_scope
             with session_scope() as db:
                 from backend.database.models import Competitor
                 competitors = db.query(Competitor).filter(Competitor.is_active == True).all()
@@ -172,10 +173,13 @@ async def _execute_job(job_id: int):
                 None, lambda: export_products(fmt=fmt, triggered_by="scheduler")
             )
 
+        elif job_type in ("beat_price", "find_product"):
+            status_override = await _run_search_job(job_type, job_name, config_data)
+
         with session_scope() as db:
             job = db.get(ScheduledJob, job_id)
             if job:
-                job.last_status = "completed"
+                job.last_status = status_override or "completed"
 
     except Exception as exc:
         logger.exception(f"Scheduled job {job_id} failed: {exc}")
@@ -192,6 +196,50 @@ async def _execute_job(job_id: int):
             job = db.get(ScheduledJob, job_id)
             if job:
                 job.next_run_at = apjob.next_run_time.replace(tzinfo=None)
+
+
+async def _run_search_job(job_type: str, job_name: str, config_data: Dict[str, Any]) -> str:
+    """Run a scheduled Beat-Price / Find-Product search and fire its alert email.
+
+    config_data shape:
+      { "search": { ...request params... },
+        "notify": { "enabled": bool, "max_price": float|None,
+                    "min_match": float|None, "min_results": int,
+                    "recipients": ["a@x.com", ...] } }
+
+    Returns a human-readable status string stored in job.last_status.
+    """
+    from backend.notify import rules as _rules
+
+    search_params = config_data.get("search") or {}
+    notify = config_data.get("notify") or {}
+
+    with session_scope() as db:
+        if job_type == "beat_price":
+            from backend.api.routes import BeatPriceRequest, search_beat_price
+            req = BeatPriceRequest(**search_params)
+            result = await search_beat_price(req, db)
+            label = search_params.get("description") or "(selected catalog products)"
+        else:
+            from backend.api.routes import FindProductRequest, search_find_product
+            req = FindProductRequest(**search_params)
+            result = await search_find_product(req, db)
+            label = search_params.get("query") or "(selected catalog products)"
+
+    rows = _rules.flatten_results(job_type, result)
+    status = f"completed — {len(rows)} result(s)"
+
+    if notify.get("enabled") and notify.get("recipients"):
+        matched = _rules.evaluate(rows, notify)
+        min_results = int(notify.get("min_results") or 1)
+        if len(matched) >= min_results:
+            from backend.notify.mailer import send_email
+            subject, body = _rules.format_email(job_name, label, matched, notify)
+            ok, detail = send_email(subject, body, notify.get("recipients"))
+            status += f"; {len(matched)} alert match → email {'sent' if ok else 'FAILED (' + detail + ')'}"
+        else:
+            status += f"; {len(matched)} match (< {min_results} threshold), no email"
+    return status
 
 
 def create_job(
@@ -270,14 +318,27 @@ def toggle_job(job_id: int, active: bool):
 
 
 def run_job_now(job_id: int):
-    """Trigger a job to run immediately (outside its schedule)."""
+    """Trigger a job to run immediately (outside its schedule).
+
+    This is called from a FastAPI threadpool thread. Rather than relying on a
+    DateTrigger (whose naive-datetime localization can push the run far into the
+    future and silently skip it), submit the coroutine straight onto the
+    scheduler's running event loop.
+    """
     sched = get_scheduler()
+    loop = getattr(sched, "_eventloop", None)
+    if loop is not None and loop.is_running():
+        asyncio.run_coroutine_threadsafe(_execute_job(job_id), loop)
+        return
+    # Fallback: schedule a one-shot with a timezone-aware "now".
+    now = datetime.now(sched.timezone)
     sched.add_job(
         _execute_job,
-        trigger=DateTrigger(run_date=datetime.utcnow()),
+        trigger=DateTrigger(run_date=now),
         args=[job_id],
-        id=f"job_{job_id}_manual_{datetime.utcnow().timestamp()}",
+        id=f"job_{job_id}_manual_{now.timestamp()}",
         replace_existing=False,
+        misfire_grace_time=3600,
     )
 
 

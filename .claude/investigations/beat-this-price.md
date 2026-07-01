@@ -104,6 +104,30 @@ a "Showing X of Y result lines" note). Columns: Searched (date+query) | Result/V
 canonical price (confirmed by user = the product shown first in catalog). Verified via
 Playwright: 50-row cap, rows span multiple searches, price-sort ascends globally.
 
+### Successful vs potential matches + USA-only filter (2026-06-29)
+- **find_suppliers now returns `(successful, potential, per_pattern_best)`** (was 2-tuple).
+  - candidate = fuzzy_score >= floor (floor = min_confidence or 30). Sub-floor dropped
+    entirely (the old "<3 clear floor → return ranked anyway" fallback was removed).
+  - **successful** = candidate AND price within [price_min, price_max] (capped at
+    max_results). No price limit set → every candidate is successful.
+  - **potential** = candidate but price outside the limit OR price unknown.
+  - `max_results` now means "number of successful matches".
+- **USA-only filter:** `usa_only` (default True) drops non-US country-TLD domains via
+  `core/parse.is_usa_domain` / `filter_usa_domains`. Generic TLDs (.com/.net/.org/.us/
+  .io/.co/.ai) pass; ccTLDs (.co.uk/.ca/.com.au/.de/.cn) are dropped. Threaded through
+  BeatPriceRequest + FindProductRequest (find-product filters web results only, not the
+  curated competitor-site pass). Every web search UI has a "🇺🇸 USA websites only"
+  checkbox, checked by default (beat-price, find-product, scheduler search jobs).
+- **Route response** carries `potential`, `successful_count`, `potential_count`
+  (per group for the product path; top-level for free-text). Only `successful` is saved
+  to BeatPriceResult history.
+- **Frontend:** separate amber "Potential matches" list under the successful results
+  (flat + per group); pause popup shows both successful + potential counts; the
+  pause/continue trigger now counts successful matches vs the target.
+- **Same rules apply to scheduler beat-price jobs** (they call search_beat_price, which
+  uses the same code; usa_only/min_confidence/price come from config_data.search).
+- Tests: `tests/test_usa_and_split.py`.
+
 ## Open Questions
 
 - Does `_google_shopping_search` ever return results? It's still called for model-number supplemental searches (`engine.py:1209`). Unclear if it works reliably vs. just `multi_engine_search` with shopping engines.

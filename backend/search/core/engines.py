@@ -24,7 +24,7 @@ from backend.search.core.constants import (
     _SITE_SEARCH_PATTERNS,
     _SITE_SKIP_HREFS,
 )
-from backend.search.core.fetch import _curl_get, _run_sync
+from backend.search.core.fetch import _curl_get, _curl_post, _run_sync
 from backend.search.core.parse import (
     _PRICE_RE,
     _cite_to_url,
@@ -34,6 +34,57 @@ from backend.search.core.parse import (
 )
 
 logger = logging.getLogger(__name__)
+
+# --- Shopping "more results" expansion -------------------------------------
+# Shopping surfaces hide several dozen extra products behind a "more"/"see more"
+# control. Browser-driven engines (Bing, DuckDuckGo) click it; API/HTML engines
+# (Google via SerpAPI, Walmart) page the request instead — same effect, no button.
+_BROWSER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+_MORE_BUTTON_MAX_CLICKS = 8        # how many times to click "more"/"see more"
+_MORE_BUTTON_SETTLE_MS = 1500      # let newly-loaded products settle after each click
+_SHOPPING_SERP_PAGES = 3           # Google Shopping (SerpAPI) result pages to pull
+_SHOPPING_IMMERSIVE_CAP = 60       # max products to resolve to direct store URLs (1 SerpAPI credit each);
+                                   # sized to cover a whole shopping query (~48) so match-% does the paring
+
+_SHOPPING_WALMART_PAGES = 3        # Walmart search pages to pull
+
+
+async def _expand_with_more_button(page, label_texts,
+                                   max_clicks: int = _MORE_BUTTON_MAX_CLICKS,
+                                   settle_ms: int = _MORE_BUTTON_SETTLE_MS) -> int:
+    """Repeatedly click a shopping page's "more"/"see more" results button so it
+    loads the additional (often several dozen) products it hides behind it.
+
+    Tries each string in ``label_texts`` in order (case-insensitive substring match
+    against clickable elements). Best-effort: stops as soon as no matching button is
+    found, a click fails, or ``max_clicks`` is reached. Returns the click count.
+    """
+    clicks = 0
+    for _ in range(max_clicks):
+        clicked = False
+        for text in label_texts:
+            try:
+                locator = page.locator(
+                    f'button:has-text("{text}"), a:has-text("{text}"), '
+                    f'[role=button]:has-text("{text}")'
+                ).first
+                if await locator.count() == 0:
+                    continue
+                await locator.scroll_into_view_if_needed(timeout=3000)
+                await locator.click(timeout=3000)
+                clicked = True
+                break
+            except Exception:
+                continue
+        if not clicked:
+            break
+        clicks += 1
+        await page.wait_for_timeout(settle_ms)
+    return clicks
 
 
 async def _text_search(query: str, max_results: int) -> List[Dict[str, Any]]:
@@ -226,27 +277,46 @@ async def _serpapi_shopping_search(query: str, max_results: int) -> List[Dict[st
                 if len(results) >= max_results:
                     break
 
-        if results:
+        if len(results) >= max_results:
             logger.info("SerpAPI inline shopping: %d results for %r", len(results), query[:60])
             return results
+        # Otherwise keep the inline hits and let Stage 2 add the rest — a single
+        # shopping query usually has dozens of similar products, and we want them all.
 
-        # Stage 2: google_shopping engine + immersive API for direct store links
-        shop_url = (
-            f"https://serpapi.com/search.json"
-            f"?engine=google_shopping&q={q}&api_key={api_key}&num=20&gl=us&hl=en"
-        )
-        html2 = await _curl_get(shop_url, timeout=20)
-        if not html2:
-            return []
-        data2 = _json.loads(html2)
+        # Stage 2: google_shopping engine + immersive API for direct store links.
+        # Page through several result pages (the API equivalent of clicking the
+        # Shopping "more" button) and collect the top products from all of them.
+        shopping_rows: List[Dict[str, Any]] = []
+        for start in range(0, _SHOPPING_SERP_PAGES * 60, 60):
+            shop_url = (
+                f"https://serpapi.com/search.json"
+                f"?engine=google_shopping&q={q}&api_key={api_key}"
+                f"&num=60&start={start}&gl=us&hl=en"
+            )
+            html2 = await _curl_get(shop_url, timeout=20)
+            if not html2:
+                break
+            try:
+                page_rows = _json.loads(html2).get('shopping_results', []) or []
+            except Exception:
+                break
+            if not page_rows:
+                break
+            shopping_rows.extend(page_rows)
+            if len(shopping_rows) >= max_results:
+                break
+        if not shopping_rows:
+            return results  # nothing more to add — return any Stage 1 inline hits
 
-        # Concurrently fetch immersive API for up to 8 top products
+        # Resolve direct store URLs for as many products as the caller asked for
+        # (one SerpAPI credit each). The cap is sized to cover a full shopping
+        # query (~48 products), so match-% scoring — not credits — does the paring.
         imm_items = [
-            item for item in data2.get('shopping_results', [])[:8]
+            item for item in shopping_rows[:min(max_results, _SHOPPING_IMMERSIVE_CAP)]
             if item.get('serpapi_immersive_product_api')
         ]
         if not imm_items:
-            return []
+            return results  # no immersive endpoints — return Stage 1 inline hits
         imm_resps = await asyncio.gather(
             *[_curl_get(f"{item['serpapi_immersive_product_api']}&api_key={api_key}", timeout=15)
               for item in imm_items],
@@ -384,73 +454,110 @@ async def _google_shopping_search(query: str, max_results: int) -> List[Dict[str
         return []
 
 
+def _parse_bing_shopping_html(html: str, max_results: int) -> List[Dict[str, Any]]:
+    """Parse Bing Shopping product cards out of (possibly "see more"-expanded) HTML.
+
+    Merchant URLs are URL-safe-base64-encoded in the u= param of aclick redirects.
+    Deduped by merchant URL (not domain) so multiple products from the same store
+    are all kept — the whole point of expanding the results.
+    """
+    results: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    # Bing Shopping product cards use anchors with class="br-offLink" that href to
+    # https://www.bing.com/aclick?...&u=<URL-safe-base64-encoded-merchant-URL>&...
+    for m in re.finditer(r'br-offLink[^>]+href="([^"]+)"', html):
+        aclick_url = m.group(1).replace('&amp;', '&')
+        u_m = re.search(r'[?&]u=([A-Za-z0-9+/\-_]+=*)', aclick_url)
+        if not u_m:
+            continue
+        b64 = u_m.group(1).replace('-', '+').replace('_', '/')
+        b64 += '=' * (-len(b64) % 4)
+        try:
+            merchant_url = unquote(base64.b64decode(b64).decode('utf-8', errors='replace'))
+        except Exception:
+            continue
+        if not merchant_url.startswith('http'):
+            continue
+        domain = _domain(merchant_url)
+        if not domain or domain in _NOISE_DOMAINS or merchant_url in seen:
+            continue
+
+        # Look in a 2000-char window around the anchor for title and price
+        card = html[max(0, m.start() - 2000): min(len(html), m.end() + 2000)]
+
+        title = ''
+        title_m = re.search(r'<span[^>]+title="([^"]{5,200})"', card)
+        if title_m:
+            title = title_m.group(1)
+        if not title:
+            h_m = re.search(r'<h[2-4][^>]*>(.*?)</h[2-4]>', card, re.DOTALL)
+            if h_m:
+                title = re.sub(r'<[^>]+>', '', h_m.group(1)).strip()
+
+        price = ''
+        br_price_m = re.search(r'class="br-price"[^>]*>(.*?)</', card, re.DOTALL)
+        if br_price_m:
+            price = re.sub(r'<[^>]+>', '', br_price_m.group(1)).strip()
+        if not price:
+            price_re_m = _PRICE_RE.search(card)
+            if price_re_m:
+                price = price_re_m.group(0).strip()
+
+        seen.add(merchant_url)
+        results.append({
+            'href': merchant_url, 'url': merchant_url, 'domain': domain,
+            'title': title or domain,
+            'body': price,
+            'price': price or None,
+            'source': 'bing_shopping',
+        })
+        if len(results) >= max_results:
+            break
+
+    return results
+
+
 async def _bing_shopping_search(query: str, max_results: int) -> List[Dict[str, Any]]:
-    """Scrape Bing Shopping — merchant URLs are base64-encoded in the u= param of aclick redirects."""
+    """Scrape Bing Shopping. Drives a headless browser so we can click the
+    "See more" link — which loads several dozen additional products — then parse
+    the expanded HTML. Falls back to a static curl fetch if the browser path is
+    unavailable (e.g. Playwright not installed)."""
+    q = quote_plus(query)
+    url = f"https://www.bing.com/shop?q={q}&count={min(max_results * 2, 40)}&cc=US&setlang=en-US"
+
+    html = ''
     try:
-        q = quote_plus(query)
-        url = f"https://www.bing.com/shop?q={q}&count={min(max_results * 2, 40)}&cc=US&setlang=en-US"
-        html = await _curl_get(url)
-        if not html:
-            return []
-        results: List[Dict[str, Any]] = []
-        seen: set = set()
+        from playwright.async_api import async_playwright
 
-        # Bing Shopping product cards use anchors with class="br-offLink" that href to
-        # https://www.bing.com/aclick?...&u=<URL-safe-base64-encoded-merchant-URL>&...
-        for m in re.finditer(r'br-offLink[^>]+href="([^"]+)"', html):
-            aclick_url = m.group(1).replace('&amp;', '&')
-            u_m = re.search(r'[?&]u=([A-Za-z0-9+/\-_]+=*)', aclick_url)
-            if not u_m:
-                continue
-            b64 = u_m.group(1).replace('-', '+').replace('_', '/')
-            b64 += '=' * (-len(b64) % 4)
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            ctx = await browser.new_context(user_agent=_BROWSER_UA)
+            page = await ctx.new_page()
             try:
-                merchant_url = unquote(base64.b64decode(b64).decode('utf-8', errors='replace'))
-            except Exception:
-                continue
-            if not merchant_url.startswith('http'):
-                continue
-            domain = _domain(merchant_url)
-            if not domain or domain in _NOISE_DOMAINS or domain in seen:
-                continue
-
-            # Look in a 2000-char window around the anchor for title and price
-            card = html[max(0, m.start() - 2000): min(len(html), m.end() + 2000)]
-
-            title = ''
-            title_m = re.search(r'<span[^>]+title="([^"]{5,200})"', card)
-            if title_m:
-                title = title_m.group(1)
-            if not title:
-                h_m = re.search(r'<h[2-4][^>]*>(.*?)</h[2-4]>', card, re.DOTALL)
-                if h_m:
-                    title = re.sub(r'<[^>]+>', '', h_m.group(1)).strip()
-
-            price = ''
-            br_price_m = re.search(r'class="br-price"[^>]*>(.*?)</', card, re.DOTALL)
-            if br_price_m:
-                price = re.sub(r'<[^>]+>', '', br_price_m.group(1)).strip()
-            if not price:
-                price_re_m = _PRICE_RE.search(card)
-                if price_re_m:
-                    price = price_re_m.group(0).strip()
-
-            seen.add(domain)
-            results.append({
-                'href': merchant_url, 'url': merchant_url, 'domain': domain,
-                'title': title or domain,
-                'body': price,
-                'price': price or None,
-                'source': 'bing_shopping',
-            })
-            if len(results) >= max_results:
-                break
-
-        logger.debug('Bing Shopping: %d results for %r', len(results), query[:60])
-        return results
+                await page.goto(url, timeout=20000, wait_until="domcontentloaded")
+                try:
+                    await page.wait_for_selector('.br-offLink, a[href*="aclick"]', timeout=8000)
+                except Exception:
+                    pass  # nothing rendered — still try to parse what we have
+                clicks = await _expand_with_more_button(
+                    page, ["See more", "Show more", "More results"])
+                if clicks:
+                    logger.debug('Bing Shopping: clicked "see more" %d time(s)', clicks)
+                html = await page.content()
+            finally:
+                await browser.close()
     except Exception as exc:
-        logger.debug('Bing Shopping failed: %s', exc)
+        logger.debug('Bing Shopping browser path failed (%s); falling back to curl', exc)
+
+    if not html:
+        html = await _curl_get(url) or ''
+    if not html:
         return []
+
+    results = _parse_bing_shopping_html(html, max_results)
+    logger.debug('Bing Shopping: %d results for %r', len(results), query[:60])
+    return results
 
 
 async def _duckduckgo_shopping_search(query: str, max_results: int) -> List[Dict[str, Any]]:
@@ -468,13 +575,7 @@ async def _duckduckgo_shopping_search(query: str, max_results: int) -> List[Dict
 
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
-            ctx = await browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                )
-            )
+            ctx = await browser.new_context(user_agent=_BROWSER_UA)
             page = await ctx.new_page()
             try:
                 await page.goto(url, timeout=15000, wait_until="domcontentloaded")
@@ -483,6 +584,11 @@ async def _duckduckgo_shopping_search(query: str, max_results: int) -> List[Dict
                     await page.wait_for_selector('[data-testid="shopping-result"], .js-shopping-result, .tile--shopping', timeout=8000)
                 except Exception:
                     pass  # No shopping results loaded — still try to parse
+
+                clicks = await _expand_with_more_button(
+                    page, ["More results", "See more", "Show more", "More"])
+                if clicks:
+                    logger.debug('DDG Shopping: clicked "more" %d time(s)', clicks)
 
                 html = await page.content()
             finally:
@@ -497,9 +603,9 @@ async def _duckduckgo_shopping_search(query: str, max_results: int) -> List[Dict
         ):
             merchant_url, price_str = link_m.group(1), link_m.group(2)
             domain = _domain(merchant_url)
-            if not domain or domain in _NOISE_DOMAINS or domain in seen or 'duckduckgo' in domain:
+            if not domain or domain in _NOISE_DOMAINS or merchant_url in seen or 'duckduckgo' in domain:
                 continue
-            seen.add(domain)
+            seen.add(merchant_url)
             results.append({
                 'href': merchant_url, 'url': merchant_url, 'domain': domain,
                 'title': domain,
@@ -525,9 +631,9 @@ async def _duckduckgo_shopping_search(query: str, max_results: int) -> List[Dict
                         if not merchant_url:
                             continue
                         domain = _domain(merchant_url)
-                        if not domain or domain in seen or 'duckduckgo' in domain:
+                        if not domain or merchant_url in seen or 'duckduckgo' in domain:
                             continue
-                        seen.add(domain)
+                        seen.add(merchant_url)
                         price = offer.get('price') or offer.get('lowPrice')
                         results.append({
                             'href': merchant_url, 'url': merchant_url, 'domain': domain,
@@ -555,49 +661,57 @@ async def _yahoo_shopping_search(query: str, max_results: int) -> List[Dict[str,
     try:
         import json as _json
         q = quote_plus(query)
-        url = f"https://www.walmart.com/search?q={q}"
-        html = await _curl_get(url)
-        if not html:
-            return []
-
-        nd_m = re.search(r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL | re.I)
-        if not nd_m:
-            return []
-
-        nd = _json.loads(nd_m.group(1))
-        stacks = (
-            nd.get('props', {})
-            .get('pageProps', {})
-            .get('initialData', {})
-            .get('searchResult', {})
-            .get('itemStacks', [])
-        )
+        base_url = f"https://www.walmart.com/search?q={q}"
         results: List[Dict[str, Any]] = []
         seen_urls: set = set()
-        for stack in stacks:
-            for item in stack.get('items', []):
-                canon = item.get('canonicalUrl', '')
-                if not canon:
-                    continue
-                href = f"https://www.walmart.com{canon.split('?')[0]}"
-                if href in seen_urls:
-                    continue
-                price_raw = item.get('price')
-                if not price_raw:
-                    price_raw = (item.get('priceInfo') or {}).get('currentPrice', '')
-                price_str = f"${float(price_raw):,.2f}" if price_raw else None
-                seen_urls.add(href)
-                results.append({
-                    'href': href, 'url': href, 'domain': 'walmart.com',
-                    'title': item.get('name', '')[:200],
-                    'body': price_str or '',
-                    'price': price_str,
-                    'source': 'yahoo_shopping',
-                })
+
+        # Page through results (the curl equivalent of clicking "more") until we
+        # hit the cap or a page yields no new products.
+        for page_num in range(1, _SHOPPING_WALMART_PAGES + 1):
+            page_url = base_url if page_num == 1 else f"{base_url}&page={page_num}"
+            html = await _curl_get(page_url)
+            if not html:
+                break
+
+            nd_m = re.search(r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL | re.I)
+            if not nd_m:
+                break
+
+            nd = _json.loads(nd_m.group(1))
+            stacks = (
+                nd.get('props', {})
+                .get('pageProps', {})
+                .get('initialData', {})
+                .get('searchResult', {})
+                .get('itemStacks', [])
+            )
+            before = len(results)
+            for stack in stacks:
+                for item in stack.get('items', []):
+                    canon = item.get('canonicalUrl', '')
+                    if not canon:
+                        continue
+                    href = f"https://www.walmart.com{canon.split('?')[0]}"
+                    if href in seen_urls:
+                        continue
+                    price_raw = item.get('price')
+                    if not price_raw:
+                        price_raw = (item.get('priceInfo') or {}).get('currentPrice', '')
+                    price_str = f"${float(price_raw):,.2f}" if price_raw else None
+                    seen_urls.add(href)
+                    results.append({
+                        'href': href, 'url': href, 'domain': 'walmart.com',
+                        'title': item.get('name', '')[:200],
+                        'body': price_str or '',
+                        'price': price_str,
+                        'source': 'yahoo_shopping',
+                    })
+                    if len(results) >= max_results:
+                        break
                 if len(results) >= max_results:
                     break
-            if len(results) >= max_results:
-                break
+            if len(results) >= max_results or len(results) == before:
+                break  # cap reached, or this page added nothing new → stop paging
 
         logger.debug('Walmart Shopping: %d results for %r', len(results), query[:60])
         return results
@@ -687,3 +801,217 @@ async def _search_competitor_site(
             return results[:max_results]
 
     return []
+
+
+# Costco, Sam's Club and Uber Eats sit behind aggressive anti-bot protection
+# (Akamai / PerimeterX) that blocks curl *and* a headless browser outright. We
+# reach their products through Google's index via SerpAPI instead: a
+# `site:<domain>` query returns real product/store pages on that domain (title,
+# URL, and price when Google surfaces it in the result's rich snippet). URL
+# substrings that mark an actual product/store page (vs. a category landing page)
+# are preferred so the better hits sort first.
+_RETAILER_PRODUCT_HINTS = {
+    'costco.com':   ('.product.', '/p/', '.html'),
+    'samsclub.com': ('/ip/',),
+    'ubereats.com': ('/store/',),
+}
+
+
+async def _serpapi_site_search(
+    domain: str, query: str, max_results: int, source_key: str,
+) -> List[Dict[str, Any]]:
+    """Return products from a bot-protected retailer via a SerpAPI ``site:`` Google
+    search. Product-page URLs are preferred; if too few are found, category/landing
+    pages backfill so the engine still returns something. Returns [] when no SerpAPI
+    key is configured or on any error, exactly like any other engine."""
+    from backend.config import Config
+    api_key = (Config().get('serpapi', 'api_key') or '').strip()
+    if not api_key:
+        return []
+    try:
+        import json as _json
+        q = quote_plus(f"{query} site:{domain}")
+        url = (
+            f"https://serpapi.com/search.json?engine=google&q={q}"
+            f"&api_key={api_key}&num=20&gl=us&hl=en"
+        )
+        raw = await _curl_get(url, timeout=20)
+        if not raw:
+            return []
+        org = _json.loads(raw).get('organic_results', []) or []
+
+        hints = _RETAILER_PRODUCT_HINTS.get(domain, ())
+        primary: List[Dict[str, Any]] = []   # actual product/store pages
+        secondary: List[Dict[str, Any]] = [] # category/landing pages (backfill)
+        seen: set = set()
+        for r in org:
+            href = r.get('link', '')
+            if not href or href in seen:
+                continue
+            d = _domain(href)
+            if not d or domain not in d:
+                continue
+            seen.add(href)
+
+            title = (r.get('title') or '')[:200]
+            snippet = r.get('snippet') or ''
+
+            # Price: SerpAPI's rich-snippet extension first, then any $-price in text.
+            price = None
+            det = ((r.get('rich_snippet') or {}).get('top') or {}).get('detected_extensions') or {}
+            if det.get('price'):
+                price = f"{det.get('currency') or '$'}{det['price']}"
+            if not price:
+                pm = _PRICE_RE.search(f"{title} {snippet}")
+                if pm:
+                    price = pm.group(0).strip()
+
+            item = {
+                'href': href, 'url': href, 'domain': d,
+                'title': title or d,
+                'body': snippet[:300],
+                'price': price,
+                'source': source_key,
+            }
+            (primary if (hints and any(h in href for h in hints)) else secondary).append(item)
+
+        results = primary if len(primary) >= 3 else primary + secondary
+        logger.debug('%s site search: %d results (%d product pages) for %r',
+                     domain, len(results), len(primary), query[:60])
+        return results[:max_results]
+    except Exception as exc:
+        logger.debug('%s SerpAPI site search failed: %s', domain, exc)
+        return []
+
+
+# Bright Data Web Unlocker gets past the Akamai/PerimeterX walls on Costco and
+# Sam's Club, returning the real search-results HTML (with live prices). Configured
+# via config/settings.yaml -> brightdata: {api_token, zone}. When unconfigured or
+# erroring, the retailer engines fall back to the SerpAPI `site:` path.
+_BRIGHTDATA_SEARCH_URLS = {
+    'costco.com':   'https://www.costco.com/CatalogSearch?keyword={q}',
+    'samsclub.com': 'https://www.samsclub.com/s/{q}',
+}
+
+
+async def _brightdata_fetch(url: str) -> str:
+    """Fetch a URL through the Bright Data Web Unlocker API. Returns the unblocked
+    page HTML, or '' when no brightdata credentials are configured / on error."""
+    from backend.config import Config
+    cfg = Config()
+    token = (cfg.get('brightdata', 'api_token') or '').strip()
+    zone = (cfg.get('brightdata', 'zone') or '').strip()
+    if not token or not zone:
+        return ''
+    try:
+        html = await _curl_post(
+            'https://api.brightdata.com/request',
+            json_body={'zone': zone, 'url': url, 'format': 'raw', 'country': 'us'},
+            extra_headers=[
+                f'Authorization: Bearer {token}',
+                'Content-Type: application/json',
+            ],
+            timeout=90,
+        )
+        return html or ''
+    except Exception as exc:
+        logger.debug('Bright Data fetch failed for %s: %s', url, exc)
+        return ''
+
+
+def _extract_jsonld_products(html: str, domain: str) -> List[Dict[str, Any]]:
+    """Pull Product/Offer entries out of JSON-LD blocks — a reliable price source on
+    retailer pages that embed structured data. Best-effort; skips anything malformed."""
+    out: List[Dict[str, Any]] = []
+
+    def _consume(node: Any) -> None:
+        if isinstance(node, list):
+            for n in node:
+                _consume(n)
+            return
+        if not isinstance(node, dict):
+            return
+        graph = node.get('@graph')
+        if isinstance(graph, list):
+            for n in graph:
+                _consume(n)
+        types = node.get('@type')
+        types = types if isinstance(types, list) else [types]
+        if 'Product' in types:
+            offers = node.get('offers') or {}
+            if isinstance(offers, list):
+                offers = offers[0] if offers else {}
+            price = (offers or {}).get('price') or (offers or {}).get('lowPrice')
+            url = node.get('url') or (offers or {}).get('url') or ''
+            if url and not url.startswith('http'):
+                url = f'https://{domain}{url}'
+            if url and _domain(url) == domain:
+                out.append({
+                    'url': url, 'domain': domain,
+                    'title': (node.get('name') or '')[:200],
+                    'description': (node.get('description') or '')[:300],
+                    'price': f"${price}" if price else None,
+                })
+
+    for m in re.finditer(
+        r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>', html, re.DOTALL | re.I
+    ):
+        try:
+            _consume(json.loads(m.group(1).strip()))
+        except Exception:
+            continue
+    return out
+
+
+async def _brightdata_retailer_search(
+    domain: str, query: str, max_results: int, source_key: str,
+) -> List[Dict[str, Any]]:
+    """Search a bot-protected retailer's own site via Bright Data Web Unlocker, parsing
+    products (with live prices) from the returned HTML. Returns [] if not configured
+    or nothing parses, so callers can fall back to the SerpAPI `site:` path."""
+    tmpl = _BRIGHTDATA_SEARCH_URLS.get(domain)
+    if not tmpl:
+        return []
+    try:
+        html = await _brightdata_fetch(tmpl.format(q=quote_plus(query)))
+        if not html or len(html) < 500:
+            return []
+
+        # Strategy 1: generic anchor-near-price parsing (same as competitor sites).
+        results = _parse_site_search_results(html, domain)
+        # Strategy 2: JSON-LD products — merge in, deduped by URL.
+        seen = {r.get('url') for r in results}
+        for p in _extract_jsonld_products(html, domain):
+            if p['url'] not in seen:
+                seen.add(p['url'])
+                results.append(p)
+
+        for r in results:
+            r['href'] = r.get('href') or r.get('url')
+            r['source'] = source_key
+        logger.info('Bright Data %s: %d results for %r', domain, len(results), query[:60])
+        return results[:max_results]
+    except Exception as exc:
+        logger.debug('Bright Data %s search failed: %s', domain, exc)
+        return []
+
+
+async def _costco_shopping_search(query: str, max_results: int) -> List[Dict[str, Any]]:
+    """Search Costco — Bright Data Web Unlocker first (live prices), SerpAPI `site:` fallback."""
+    res = await _brightdata_retailer_search('costco.com', query, max_results, 'costco')
+    if res:
+        return res
+    return await _serpapi_site_search('costco.com', query, max_results, 'costco')
+
+
+async def _samsclub_shopping_search(query: str, max_results: int) -> List[Dict[str, Any]]:
+    """Search Sam's Club — Bright Data Web Unlocker first (live prices), SerpAPI `site:` fallback."""
+    res = await _brightdata_retailer_search('samsclub.com', query, max_results, 'samsclub')
+    if res:
+        return res
+    return await _serpapi_site_search('samsclub.com', query, max_results, 'samsclub')
+
+
+async def _ubereats_shopping_search(query: str, max_results: int) -> List[Dict[str, Any]]:
+    """Search Uber Eats stores (via SerpAPI site search — Uber Eats blocks scraping)."""
+    return await _serpapi_site_search('ubereats.com', query, max_results, 'ubereats')

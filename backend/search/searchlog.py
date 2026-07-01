@@ -35,6 +35,9 @@ _ENGINE_NAMES = {
     "bing_shopping": "Bing Shopping",
     "yahoo_shopping": "Yahoo Shopping",
     "ddg_shopping": "DuckDuckGo Shopping",
+    "costco": "Costco",
+    "samsclub": "Sam's Club",
+    "ubereats": "Uber Eats",
 }
 
 

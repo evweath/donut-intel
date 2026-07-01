@@ -12,9 +12,39 @@ See .claude/investigations/beat-this-price.md.
 import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
+import re as _re
+
 from backend.search.core.constants import narrow_engines
 from backend.search.core.engines import _google_shopping_search, _image_search
-from backend.search.core.parse import _img_index
+from backend.search.core.parse import _img_index, filter_usa_domains
+
+
+def _price_to_float(val: Any) -> Optional[float]:
+    """'$1,029.99' / 1029.99 / None -> float | None."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    digits = _re.sub(r'[^\d.]', '', str(val))
+    try:
+        return float(digits) if digits else None
+    except ValueError:
+        return None
+
+
+def _price_within(price: Any, price_min: Optional[float], price_max: Optional[float]) -> bool:
+    """True if the price satisfies the user's limit. With a limit set, an unknown
+    price fails (we can't confirm it qualifies). No limit set -> always True."""
+    if price_min is None and price_max is None:
+        return True
+    p = _price_to_float(price)
+    if p is None:
+        return False
+    if price_min is not None and p < price_min:
+        return False
+    if price_max is not None and p > price_max:
+        return False
+    return True
 from backend.search.core.rank import (
     _aggregate_and_rank,
     _enrich_prices,
@@ -36,19 +66,24 @@ async def find_suppliers(
     exclude_domains: Optional[set] = None,
     exact_query: bool = False,
     min_confidence: Optional[float] = None,
-) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    usa_only: bool = True,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, int]]:
     """
     Find alternate suppliers using pattern-based title queries.
 
     pattern_queries is an ordered list of (pattern_id, query_text) produced by
     pattern_learner.generate_queries().  Each pattern runs its own concurrent
     search; all results are fuzzy-scored against the original description,
-    deduplicated by domain, sorted best-first.  Results with fuzzy score >=30%
-    are preferred; if fewer than 3 clear that bar the top results are returned
-    regardless so the page is never empty.
+    deduplicated by domain, sorted best-first.
 
-    Returns (results, per_pattern_best_fuzzy) where per_pattern_best_fuzzy maps
-    each pattern_id to the highest fuzzy score any of its results achieved.
+    Returns (successful, potential, per_pattern_best_fuzzy):
+      * successful — fuzzy match >= floor AND price within the user's price limit
+        (capped at max_results). These are the "successful product matches".
+      * potential — fuzzy match >= floor but price OUTSIDE the limit (or unknown):
+        the product matches but the price doesn't qualify.
+      * per_pattern_best_fuzzy — highest fuzzy score each pattern_id achieved.
+    floor = min_confidence if given else 30. With usa_only (default), non-US
+    country-TLD domains are dropped before classification.
     """
     char_parts: List[str] = [str(v) for v in (characteristics or {}).values() if v]
     price_hint = f"under ${price_max:.0f}" if price_max else (f"over ${price_min:.0f}" if price_min else '')
@@ -66,7 +101,8 @@ async def find_suppliers(
     # .claude/investigations/beat-this-price.md.
     pattern_engines = narrow_engines(
         ['ddg', 'bing', 'google', 'yahoo',
-         'shopping', 'bing_shopping', 'yahoo_shopping', 'ddg_shopping'],
+         'shopping', 'bing_shopping', 'yahoo_shopping', 'ddg_shopping',
+         'costco', 'samsclub', 'ubereats'],
         selected_engines)
     shopping_on = selected_engines is None or 'shopping' in selected_engines
 
@@ -157,9 +193,25 @@ async def find_suppliers(
     # Sort by fuzzy score descending.  Apply the 30% floor only when enough
     # results clear it; otherwise fall back to the top-N by score so the user
     # always sees something rather than an empty list.
+    # A candidate must clear the fuzzy floor to count at all (successful OR
+    # potential). Sub-floor results are dropped entirely.
     floor = min_confidence if min_confidence is not None else 30
     ranked = sorted(domain_best.values(), key=lambda r: -(r.get('fuzzy_score') or 0))
-    above_threshold = [r for r in ranked if (r.get('fuzzy_score') or 0) >= floor]
-    pool = above_threshold if len(above_threshold) >= 3 else ranked
-    results = await _enrich_prices(pool[:max_results])
-    return results, per_pattern_best
+    candidates = [r for r in ranked if (r.get('fuzzy_score') or 0) >= floor]
+
+    # "USA websites only" filter (default on) — drop non-US country-TLD domains.
+    if usa_only:
+        candidates = filter_usa_domains(candidates)
+
+    # Enrich prices so candidates can be split by the price limit. Bound the
+    # number of live price fetches for performance.
+    candidates = await _enrich_prices(candidates[: max(max_results * 4, 20)])
+
+    # Split into successful (price within limit) vs potential (matches the
+    # product but price is outside the limit / unknown).
+    successful: List[Dict[str, Any]] = []
+    potential: List[Dict[str, Any]] = []
+    for r in candidates:
+        (successful if _price_within(r.get('price'), price_min, price_max) else potential).append(r)
+
+    return successful[:max_results], potential, per_pattern_best
