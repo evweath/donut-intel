@@ -157,6 +157,7 @@ function app() {
     keywordEditText: '',
     bulkImportText: '',
     bulkImportSessionName: '',
+    competitorPicks: {},   // domain -> true: domains ticked in search results to add as competitors
     competitorScanForm: { ids: [], session_name: '', find_similar: false, max_pages: 100, criteria: {} },
     competitorScanRunning: false,
     webSearchRunning: false,
@@ -1414,6 +1415,37 @@ function app() {
         this.bulkImportText = '';
         await this.loadCompetitors();
       } catch (e) { this.toast('Bulk import failed: ' + e.message, 'error'); }
+    },
+
+    // --- Add competitor domains straight from search-result rows --------------
+    // Every screen that lists competitor-product domains renders a checkbox
+    // bound to competitorPicks[domain]; the floating bar adds the ticked ones.
+    togglePick(domain, checked) {
+      if (!domain) return;
+      if (checked) this.competitorPicks[domain] = true;
+      else delete this.competitorPicks[domain];
+    },
+    competitorPickCount() {
+      return Object.keys(this.competitorPicks).filter(k => this.competitorPicks[k]).length;
+    },
+    clearCompetitorPicks() { this.competitorPicks = {}; },
+    async addPickedCompetitors() {
+      const domains = Object.keys(this.competitorPicks).filter(k => this.competitorPicks[k]);
+      if (!domains.length) return;
+      try {
+        const r = await this.api('/api/competitors/bulk-import', {
+          method: 'POST',
+          body: JSON.stringify({ domains, domain_type: 'competitor' }),
+        });
+        const parts = [];
+        if (r.added) parts.push(`${r.added} added`);
+        if (r.updated) parts.push(`${r.updated} updated`);
+        if (r.skipped_as_source && r.skipped_as_source.length)
+          parts.push(`${r.skipped_as_source.length} skipped (your own site)`);
+        this.toast(`Competitors: ${parts.join(', ') || 'no changes (already tracked)'}`, 'success');
+        this.competitorPicks = {};
+        await this.loadCompetitors();
+      } catch (e) { this.toast('Add competitors failed: ' + e.message, 'error'); }
     },
 
     async scanCompetitors(ids) {
