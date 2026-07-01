@@ -981,7 +981,7 @@
           </div>
           <!-- Sortable column header -->
           <div class="px-4 py-2 flex items-start gap-2 text-[10px] uppercase text-gray-400 border-b dark:border-gray-700 bg-gray-50/60 dark:bg-gray-700/30">
-            <div class="w-6 flex-shrink-0"></div>
+            <div style="width:1.5rem" class="flex-shrink-0"></div>
             <button type="button" @click="setSort(fpHistorySort, 'date')" class="w-32 flex-shrink-0 text-left uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200">
               Searched <span x-text="sortIcon(fpHistorySort, 'date')"></span>
             </button>
@@ -1004,7 +1004,7 @@
             <template x-for="r in historyFlatRows(findProductHistoryVisible(), fpHistorySort, fpHistoryLimit)" :key="r.id">
               <div class="px-4 py-2 flex items-start gap-2 text-xs">
                 <!-- Delete checkbox (tick rows, then "Delete selected") -->
-                <span class="w-6 flex-shrink-0 flex justify-center pt-0.5">
+                <span style="width:1.5rem" class="flex-shrink-0 flex justify-center pt-0.5">
                   <input type="checkbox" class="w-4 h-4 cursor-pointer" title="Select this line for deletion"
                     :checked="!!fpHistorySelected[r.id]" @change="fpHistorySelected[r.id] = $event.target.checked" />
                 </span>
@@ -1488,7 +1488,7 @@
           </div>
           <!-- Sortable column header -->
           <div class="px-4 py-2 flex items-start gap-2 text-[10px] uppercase text-gray-400 border-b dark:border-gray-700 bg-gray-50/60 dark:bg-gray-700/30">
-            <div class="w-6 flex-shrink-0"></div>
+            <div style="width:1.5rem" class="flex-shrink-0"></div>
             <button type="button" @click="setSort(bpHistorySort, 'date')" class="w-32 flex-shrink-0 text-left uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200">
               Searched <span x-text="sortIcon(bpHistorySort, 'date')"></span>
             </button>
@@ -1511,7 +1511,7 @@
             <template x-for="r in historyFlatRows(beatPriceHistoryVisible(), bpHistorySort, bpHistoryLimit)" :key="r.id">
               <div class="px-4 py-2 flex items-start gap-2 text-xs">
                 <!-- Delete checkbox (tick rows, then "Delete selected") -->
-                <span class="w-6 flex-shrink-0 flex justify-center pt-0.5">
+                <span style="width:1.5rem" class="flex-shrink-0 flex justify-center pt-0.5">
                   <input type="checkbox" class="w-4 h-4 cursor-pointer" title="Select this line for deletion"
                     :checked="!!bpHistorySelected[r.id]" @change="bpHistorySelected[r.id] = $event.target.checked" />
                 </span>
