@@ -250,9 +250,11 @@ async def test_find_suppliers_exact_query_is_verbatim():
 
 
 @pytest.mark.asyncio
-async def test_find_suppliers_default_query_keeps_wrapper():
-    """The catalog/product path (exact_query=False, default) still wraps the
-    query with 'buy ... supplier wholesale price' — verbatim behavior is opt-in."""
+async def test_find_suppliers_default_query_is_verbatim():
+    """The catalog/product path (default, exact_query=False) must ALSO send the
+    query verbatim — nothing prepended or appended. Per user requirement, neither
+    Beat-This-Price nor Find-Product may wrap the query with
+    'buy ... supplier wholesale price' or leak characteristics/price text."""
     captured_queries = []
 
     async def fake_multi_engine_search(query, max_results=10, engines=None, **kwargs):
@@ -262,11 +264,17 @@ async def test_find_suppliers_default_query_keeps_wrapper():
     with patch('backend.search.pages.beat_price.multi_engine_search', side_effect=fake_multi_engine_search), \
          patch('backend.search.pages.beat_price._google_shopping_search', new_callable=AsyncMock, return_value=[]), \
          patch('backend.search.pages.beat_price._image_search', new_callable=AsyncMock, return_value=[]):
-        await find_suppliers(description='Acme Widget', max_results=5)
+        await find_suppliers(
+            description='Acme Widget',
+            price_max=500,                         # must NOT leak into the query
+            characteristics={'color': 'red'},      # must NOT leak into the query
+            max_results=5,
+        )
 
-    assert captured_queries and all(
-        q.startswith('buy ') and 'supplier wholesale price' in q for q in captured_queries
-    ), f'default path should keep the wrapper, got {captured_queries!r}'
+    assert captured_queries and all(q == 'Acme Widget' for q in captured_queries), (
+        f'default path must be verbatim with nothing prepended/appended, '
+        f'got {captured_queries!r}'
+    )
 
 
 # ---------------------------------------------------------------------------

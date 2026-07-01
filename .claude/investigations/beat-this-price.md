@@ -131,3 +131,24 @@ Playwright: 50-row cap, rows span multiple searches, price-sort ascends globally
 ## Open Questions
 
 - Does `_google_shopping_search` ever return results? It's still called for model-number supplemental searches (`engine.py:1209`). Unclear if it works reliably vs. just `multi_engine_search` with shopping engines.
+
+## 2026-07-01 — Verbatim query on both search pages (no prepend/append)
+
+User requirement: on **Find This Product** AND **Beat This Price**, the search
+text must be sent to the engines VERBATIM — nothing prepended or appended.
+
+- Find-Product was already verbatim (`pages/find_product.py`, `query = product_name`).
+- Beat-Price had two paths: free-text (`exact_query=True`, already verbatim) and
+  the catalog/product path, which wrapped the query as
+  `buy {query + characteristics + price_hint} supplier wholesale price` and ran
+  supplemental `buy {model}` / `buy {category} wholesale` / `buy {description}`
+  (image) queries.
+- Fix (`pages/beat_price.py`): removed ALL decoration. Pattern queries, model,
+  category, and image searches now use the raw text verbatim. `exact_query` is now
+  a no-op for query building (kept for API compat); `char_parts`/`price_hint`
+  removed. `price_min/max` still used only for result classification, not the query.
+- Tests: replaced `test_find_suppliers_default_query_keeps_wrapper` with
+  `test_find_suppliers_default_query_is_verbatim`; `..._exact_query_is_verbatim`
+  still passes. Full suite green (23 passed).
+- NOTE: supplemental model/category searches still RUN (verbatim). If the user
+  wants ONLY the typed text searched, remove those blocks too.

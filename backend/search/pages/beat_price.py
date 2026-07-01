@@ -85,8 +85,6 @@ async def find_suppliers(
     floor = min_confidence if given else 30. With usa_only (default), non-US
     country-TLD domains are dropped before classification.
     """
-    char_parts: List[str] = [str(v) for v in (characteristics or {}).values() if v]
-    price_hint = f"under ${price_max:.0f}" if price_max else (f"over ${price_min:.0f}" if price_min else '')
     exclude = exclude_domains or set()   # competitors already found (for "continue")
 
     if not pattern_queries:
@@ -111,16 +109,13 @@ async def find_suppliers(
     task_pids: List[str] = []   # parallel list: pattern_id per task slot
 
     if pattern_engines:
+        # The query text is sent VERBATIM — nothing prepended or appended (no
+        # "buy … supplier wholesale price" wrapper, no characteristics/price text).
+        # Applies to BOTH the free-text and catalog/product paths, per user
+        # requirement. See .claude/investigations/beat-this-price.md.
         for pid, query in pattern_queries:
-            if exact_query:
-                # Free-text path: send the user's input verbatim — no wrapper words,
-                # no appended characteristics/price text. See routes free-text path.
-                search_query = query
-            else:
-                base = ' '.join(filter(None, [query] + char_parts + [price_hint]))
-                search_query = f"buy {base} supplier wholesale price"
             all_tasks.append(multi_engine_search(
-                search_query, max_results=max_results * 2,
+                query, max_results=max_results * 2,
                 engines=pattern_engines,
                 match_pct=30, log_label="beat price",
             ))
@@ -132,22 +127,22 @@ async def find_suppliers(
         model_engines = narrow_engines(['bing', 'google', 'yahoo'], selected_engines)
         if model_engines:
             all_tasks.append(multi_engine_search(
-                f"buy {model_number} {price_hint}".strip(), max_results=max_results * 2,
+                model_number, max_results=max_results * 2,
                 engines=model_engines, match_pct=30, log_label="beat price",
             ))
         if shopping_on:
-            all_tasks.append(_google_shopping_search(f"buy {model_number}", max_results=max_results))
+            all_tasks.append(_google_shopping_search(model_number, max_results=max_results))
     if category:
         cat_engines = narrow_engines(['ddg', 'bing', 'google', 'yahoo'], selected_engines)
         if cat_engines:
             all_tasks.append(multi_engine_search(
-                f"buy {category} wholesale {price_hint}".strip(), max_results=max_results * 2,
+                category, max_results=max_results * 2,
                 engines=cat_engines, match_pct=30, log_label="beat price",
             ))
 
     all_raw, images = await asyncio.gather(
         asyncio.gather(*all_tasks, return_exceptions=True),
-        _image_search(f"buy {description}", max_results=max_results),
+        _image_search(description, max_results=max_results),
     )
     img_idx = _img_index(images) if isinstance(images, list) else {}
 
