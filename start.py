@@ -4,14 +4,36 @@ Cross-platform server start script.
 Works on macOS and Windows. Reads port and cert paths from config/settings.yaml.
 Usage: python start.py
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
 
+
+def _ensure_venv() -> None:
+    """Re-run this script under the project's .venv interpreter so the app's
+    dependencies (uvicorn, etc.) are always found — even when the user runs
+    `python start.py` with the system Python, as the Windows guide instructs."""
+    root = Path(__file__).resolve().parent
+    bin_dir = 'Scripts' if os.name == 'nt' else 'bin'
+    exe = 'python.exe' if os.name == 'nt' else 'python'
+    vpy = root / '.venv' / bin_dir / exe
+    if not vpy.exists():
+        return  # setup not run yet — let the import error below guide the user
+    try:
+        if Path(sys.executable).resolve() == vpy.resolve():
+            return  # already inside the venv
+    except OSError:
+        return
+    sys.exit(subprocess.run([str(vpy), *sys.argv]).returncode)
+
+
+_ensure_venv()
+
 try:
     import yaml
 except ImportError:
-    print('pyyaml not installed. Run: pip install -r requirements.txt')
+    print('pyyaml not installed. Run: python setup_env.py')
     sys.exit(1)
 
 ROOT = Path(__file__).parent

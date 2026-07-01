@@ -1457,20 +1457,55 @@ and either merge them automatically (high confidence) or flag them for your revi
 # Sanitized settings.yaml for the ZIP
 # ---------------------------------------------------------------------------
 
+# Any config key whose name contains one of these is treated as a secret and
+# scrubbed recursively — so new secret fields (e.g. ai.anthropic_api_key,
+# brightdata.api_token) are caught automatically without editing this list.
+_SECRET_KEY_HINTS = (
+    'password', 'passwd', 'secret', 'token', 'api_key', 'apikey',
+    'access_token', 'client_secret',
+)
+
+
+def _is_placeholder(v: str) -> bool:
+    """Empty, 'changeme', or an existing YOUR_/CHANGE_ME placeholder — safe to keep."""
+    up = v.strip().upper()
+    return (not up) or up == 'CHANGEME' or up.startswith('YOUR_') or up.startswith('CHANGE_ME')
+
+
+def _scrub(obj) -> None:
+    """Recursively replace any real-looking secret value with a placeholder."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, (dict, list)):
+                _scrub(v)
+            elif isinstance(v, str) and any(h in k.lower() for h in _SECRET_KEY_HINTS):
+                if not _is_placeholder(v):
+                    obj[k] = f'YOUR_{k.upper()}_HERE'
+    elif isinstance(obj, list):
+        for item in obj:
+            _scrub(item)
+
+
 def _sanitized_config() -> str:
     config_path = ROOT / 'config' / 'settings.yaml'
     cfg = yaml.safe_load(config_path.read_text(encoding='utf-8'))
 
+    # Nice, specific placeholders for the well-known fields...
     cfg['app']['secret_key'] = 'CHANGE_ME_REPLACE_WITH_RANDOM_32_CHARACTER_STRING'
-
-    cfg['anthropic']['api_key'] = 'YOUR_ANTHROPIC_API_KEY_HERE'
-    cfg['serpapi']['api_key'] = 'YOUR_SERPAPI_API_KEY_HERE'
-
+    if isinstance(cfg.get('anthropic'), dict):
+        cfg['anthropic']['api_key'] = 'YOUR_ANTHROPIC_API_KEY_HERE'
+    if isinstance(cfg.get('serpapi'), dict):
+        cfg['serpapi']['api_key'] = 'YOUR_SERPAPI_API_KEY_HERE'
+    if isinstance(cfg.get('brightdata'), dict):
+        cfg['brightdata']['api_token'] = 'YOUR_BRIGHTDATA_API_TOKEN_HERE'
     for site in cfg.get('source_sites', []):
         site['shopify_api_key'] = 'YOUR_SHOPIFY_API_KEY_HERE'
         site['shopify_access_token'] = 'YOUR_SHOPIFY_ACCESS_TOKEN_HERE'
         site['shopify_client_id'] = 'YOUR_SHOPIFY_CLIENT_ID_HERE'
         site['shopify_client_secret'] = 'YOUR_SHOPIFY_CLIENT_SECRET_HERE'
+
+    # ...then a recursive sweep as a safety net for anything not listed above.
+    _scrub(cfg)
 
     return yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
@@ -1511,11 +1546,15 @@ def generate_pdf() -> Path:
 # ZIP creation
 # ---------------------------------------------------------------------------
 
+# Runtime dirs (logs/exports/data/certs) are excluded wholesale and recreated
+# empty below — they hold live logs (which can contain secrets), the customer
+# database, and the dev TLS private key, none of which should ship.
 _EXCLUDE_DIRS  = {
     '.venv', '__pycache__', '.git', '.pytest_cache', '.mypy_cache',
-    'node_modules', '.claude',
+    'node_modules', '.claude', 'logs', 'exports', 'data', 'certs',
 }
-_EXCLUDE_EXTS  = {'.pyc', '.pyo', '.db', '.db-shm', '.db-wal', '.log', '.enc', '.jsonl'}
+_EXCLUDE_EXTS  = {'.pyc', '.pyo', '.db', '.db-shm', '.db-wal', '.log', '.enc',
+                  '.jsonl', '.out', '.pem', '.key'}
 _EXCLUDE_FILES = {
     'create_windows_package.py',
     '_guide_tmp.html',
@@ -1537,6 +1576,9 @@ def _should_exclude(src: Path) -> bool:
         return True
     # Catch .bak, .bak-TIMESTAMP, .bak-anything
     if '.bak' in src.name:
+        return True
+    # Catch rotated logs (donut_intel.log.1, .log.2, …) whose suffix is .1/.2
+    if '.log' in src.name:
         return True
     return False
 
