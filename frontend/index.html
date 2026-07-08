@@ -1508,8 +1508,18 @@
                   <span class="flex-shrink-0 text-gray-400 w-16 text-right"
                     x-text="(s.results?.length || 0) + (((s.results?.length || 0) === 1) ? ' result' : ' results')"></span>
                 </button>
-                <!-- Group body: this search's result rows -->
+                <!-- Group body: column headers + this search's result rows -->
                 <div x-show="bpGroupOpen[s.id]" class="bg-gray-50/40 dark:bg-gray-900/20 divide-y divide-gray-100 dark:divide-gray-700/60">
+                  <!-- Column headers (aligned to the data rows below) -->
+                  <div class="pl-9 pr-4 py-1.5 flex items-center gap-2 text-[10px] uppercase text-gray-400 bg-gray-100/60 dark:bg-gray-700/30">
+                    <div class="flex-1 min-w-0">Result / Vendor</div>
+                    <div class="w-14 text-right flex-shrink-0">Match</div>
+                    <div class="w-20 text-right flex-shrink-0">Our $</div>
+                    <div class="w-20 text-right flex-shrink-0" title="Our projected cost = our price × 0.7">Cost $</div>
+                    <div class="w-20 text-right flex-shrink-0" title="Competitor price">Comp $</div>
+                    <div class="w-16 text-center flex-shrink-0" title="Tick if this is a similar / comparable product (not identical)">Similr</div>
+                    <div class="w-16 text-center flex-shrink-0" title="Tick after visiting the link and verifying this is the same product &amp; price">Same</div>
+                  </div>
                   <template x-for="r in (s.results || [])" :key="r.id">
                     <div class="pl-9 pr-4 py-1.5 flex items-center gap-2 text-xs">
                       <a :href="r.url" target="_blank" class="flex-1 min-w-0 text-blue-500 hover:underline truncate" x-text="r.title || r.domain"></a>
