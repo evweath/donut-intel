@@ -3419,8 +3419,10 @@
       </div>
     </div>
 
-    <!-- Scraping Profile -->
-    <div x-show="competitorProfile" class="border-t dark:border-gray-700 pt-4">
+    <!-- Scraping Profile — x-if (not x-show) so the inner x-model inputs are not
+         evaluated against a null competitorProfile before one is loaded. -->
+    <template x-if="competitorProfile">
+    <div class="border-t dark:border-gray-700 pt-4">
       <div class="font-semibold text-sm mb-3 flex items-center gap-2">
         🔧 Scraping Profile
         <span x-show="competitorProfile?.platform && competitorProfile.platform !== 'unknown'"
@@ -3496,6 +3498,7 @@
         <span x-text="competitorProfileSaving ? 'Saving...' : 'Save Profile'"></span>
       </button>
     </div>
+    </template>
   </div>
 </div>
 
