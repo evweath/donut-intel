@@ -980,7 +980,12 @@
         <div x-show="findProductHistoryOpen" class="border-t dark:border-gray-700">
           <!-- Grouped-by-search overview: one collapsible line per search, showing the
                full search text. Expanding reveals that search's result rows. -->
-          <div class="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-400">By search</div>
+          <div class="px-4 pt-2 pb-1 flex items-center gap-3">
+            <span class="text-[10px] uppercase tracking-wide text-gray-400">By search</span>
+            <button type="button" x-show="historySelectedCount(fpHistorySelected) > 0" @click="deleteSelectedHistory('fp')"
+              class="ml-auto text-xs text-red-500 hover:text-red-600 font-medium"
+              x-text="'🗑 Delete selected (' + historySelectedCount(fpHistorySelected) + ')'"></button>
+          </div>
           <div class="divide-y divide-gray-100 dark:divide-gray-700 border-b dark:border-gray-700">
             <template x-for="s in findProductHistoryVisible()" :key="s.id">
               <div>
@@ -997,7 +1002,8 @@
                 <!-- Group body: column headers + this search's result rows -->
                 <div x-show="fpGroupOpen[s.id]" class="bg-gray-50/40 dark:bg-gray-900/20 divide-y divide-gray-100 dark:divide-gray-700/60">
                   <!-- Column headers (aligned to the data rows below) -->
-                  <div class="pl-9 pr-4 py-1.5 flex items-center gap-2 text-[10px] uppercase text-gray-400 bg-gray-100/60 dark:bg-gray-700/30">
+                  <div class="pl-4 pr-4 py-1.5 flex items-center gap-2 text-[10px] uppercase text-gray-400 bg-gray-100/60 dark:bg-gray-700/30">
+                    <span class="w-5 flex-shrink-0"></span>
                     <div class="flex-1 min-w-0">Result / Vendor</div>
                     <div class="w-14 text-right flex-shrink-0">Match</div>
                     <div class="w-20 text-right flex-shrink-0">Our $</div>
@@ -1007,7 +1013,11 @@
                     <div class="w-16 text-center flex-shrink-0" title="Tick after visiting the link and verifying this is the same product &amp; price">Same</div>
                   </div>
                   <template x-for="r in (s.results || [])" :key="r.id">
-                    <div class="pl-9 pr-4 py-1.5 flex items-center gap-2 text-xs">
+                    <div class="pl-4 pr-4 py-1.5 flex items-center gap-2 text-xs">
+                      <span class="w-5 flex-shrink-0 flex justify-center">
+                        <input type="checkbox" class="w-4 h-4 cursor-pointer" title="Select this line for deletion"
+                          :checked="!!fpHistorySelected[r.id]" @change="fpHistorySelected[r.id] = $event.target.checked" />
+                      </span>
                       <div class="flex-1 min-w-0 flex items-center gap-2">
                         <span class="px-1 py-0.5 rounded flex-shrink-0"
                           :class="r.result_type === 'competitor' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'"
@@ -1554,7 +1564,12 @@
         <div x-show="beatPriceHistoryOpen" class="border-t dark:border-gray-700">
           <!-- Grouped-by-search overview: one collapsible line per search, showing the
                full search text. Expanding reveals that search's result rows. -->
-          <div class="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-400">By search</div>
+          <div class="px-4 pt-2 pb-1 flex items-center gap-3">
+            <span class="text-[10px] uppercase tracking-wide text-gray-400">By search</span>
+            <button type="button" x-show="historySelectedCount(bpHistorySelected) > 0" @click="deleteSelectedHistory('bp')"
+              class="ml-auto text-xs text-red-500 hover:text-red-600 font-medium"
+              x-text="'🗑 Delete selected (' + historySelectedCount(bpHistorySelected) + ')'"></button>
+          </div>
           <div class="divide-y divide-gray-100 dark:divide-gray-700 border-b dark:border-gray-700">
             <template x-for="s in beatPriceHistoryVisible()" :key="s.id">
               <div>
@@ -1571,7 +1586,8 @@
                 <!-- Group body: column headers + this search's result rows -->
                 <div x-show="bpGroupOpen[s.id]" class="bg-gray-50/40 dark:bg-gray-900/20 divide-y divide-gray-100 dark:divide-gray-700/60">
                   <!-- Column headers (aligned to the data rows below) -->
-                  <div class="pl-9 pr-4 py-1.5 flex items-center gap-2 text-[10px] uppercase text-gray-400 bg-gray-100/60 dark:bg-gray-700/30">
+                  <div class="pl-4 pr-4 py-1.5 flex items-center gap-2 text-[10px] uppercase text-gray-400 bg-gray-100/60 dark:bg-gray-700/30">
+                    <span class="w-5 flex-shrink-0"></span>
                     <div class="flex-1 min-w-0">Result / Vendor</div>
                     <div class="w-14 text-right flex-shrink-0">Match</div>
                     <div class="w-20 text-right flex-shrink-0">Our $</div>
@@ -1581,7 +1597,11 @@
                     <div class="w-16 text-center flex-shrink-0" title="Tick after visiting the link and verifying this is the same product &amp; price">Same</div>
                   </div>
                   <template x-for="r in (s.results || [])" :key="r.id">
-                    <div class="pl-9 pr-4 py-1.5 flex items-center gap-2 text-xs">
+                    <div class="pl-4 pr-4 py-1.5 flex items-center gap-2 text-xs">
+                      <span class="w-5 flex-shrink-0 flex justify-center">
+                        <input type="checkbox" class="w-4 h-4 cursor-pointer" title="Select this line for deletion"
+                          :checked="!!bpHistorySelected[r.id]" @change="bpHistorySelected[r.id] = $event.target.checked" />
+                      </span>
                       <a :href="r.url" target="_blank" class="flex-1 min-w-0 text-blue-500 hover:underline truncate" x-text="r.title || r.domain"></a>
                       <span class="w-14 text-right flex-shrink-0 text-gray-400" title="Match %"
                         x-text="r.fuzzy_score != null ? r.fuzzy_score + '%' : '—'"></span>
