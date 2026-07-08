@@ -107,6 +107,7 @@ function app() {
     fpHistorySelected: {},                     // result id -> true (rows ticked for deletion)
     bpHistorySelected: {},
     bpGroupOpen: {},                           // beat-price search id -> expanded? (grouped-by-search overview)
+    fpGroupOpen: {},                           // find-product search id -> expanded?
     // Batch-boundary pause state (find 10, ask to continue). Pause only kicks in
     // when the user kept the default target (<=10); a larger target runs straight.
     findProductTarget: 10,
@@ -1294,13 +1295,15 @@ function app() {
       return (searches || []).reduce((n, s) => n + (s.results?.length || 0), 0);
     },
 
-    // --- Beat-Price "grouped by search" overview (collapsible per search) -----
-    // Human label for a search group: the free-text query the user typed, else
-    // the selected catalog products' search terms (what a catalog search actually
+    // --- "Grouped by search" overview (collapsible per search) ----------------
+    // Shared by the Find-Product and Beat-Price history sections.
+    // Human label for a search group: the free-text query the user typed
+    // (Find-Product uses `query`, Beat-Price uses `description`), else the
+    // selected catalog products' search terms (what a catalog search actually
     // queried), else a summary of any other search params.
-    bpGroupLabel(s) {
-      const desc = (s?.description || '').trim();
-      if (desc) return desc;
+    historyGroupLabel(s) {
+      const text = ((s?.query ?? s?.description) || '').trim();
+      if (text) return text;
       const terms = (s?.product_search_terms || []).filter(Boolean);
       if (terms.length) return terms.join(' · ');
       const parts = [];
@@ -1309,7 +1312,9 @@ function app() {
       if (parts.length) return parts.join(' · ');
       return 'Catalog products (no search text)';
     },
-    toggleBpGroup(id) { this.bpGroupOpen[id] = !this.bpGroupOpen[id]; },
+    // Toggle a group's expanded state. `openMap` is the page's reactive map
+    // (bpGroupOpen / fpGroupOpen); mutating it in place keeps Alpine reactive.
+    toggleHistoryGroup(openMap, id) { openMap[id] = !openMap[id]; },
 
     async deleteFindProductResult(resultId) {
       try {

@@ -2339,20 +2339,30 @@ def find_product_history(limit: int = 20, db: Session = Depends(get_db_session))
         search_pids[s.id] = pids
     all_pids = {pid for pids in search_pids.values() for pid in pids}
     price_by_pid = {}
+    term_by_pid = {}
     if all_pids:
         for p in db.query(Product).filter(Product.id.in_(all_pids)).all():
             price_by_pid[p.id] = p.price_canonical
+            term_by_pid[p.id] = (p.product_search_term or p.canonical_title or "").strip()
 
     out = []
     for s in searches:
         pids = search_pids.get(s.id, [])
         our_price = price_by_pid.get(pids[0]) if pids else None
+        # Distinct search terms behind this group (order-preserving), so the UI
+        # can label catalog searches with what was actually searched.
+        product_terms = []
+        for pid in pids:
+            t = term_by_pid.get(pid)
+            if t and t not in product_terms:
+                product_terms.append(t)
         out.append({
             "id": s.id,
             "query": s.query,
             "model_number": s.model_number,
             "category": s.category,
             "product_ids": pids,
+            "product_search_terms": product_terms,
             "searched_at": s.searched_at.isoformat() if s.searched_at else None,
             "results": [
                 {
