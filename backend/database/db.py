@@ -58,6 +58,7 @@ _MIGRATIONS = [
     ("competitors", "is_category_only", "BOOLEAN DEFAULT 0"),
     ("products", "product_search_term", "TEXT"),
     ("beat_price_results", "fuzzy_score", "INTEGER"),
+    ("result_confirmations", "match_type", "TEXT"),
 ]
 
 
@@ -107,6 +108,20 @@ def _backfill_product_search_term() -> None:
         logger.info("Backfilled product_search_term for %d products", filled)
 
 
+def _backfill_match_type(engine: Engine) -> None:
+    """Existing confirmations pre-date the SAME/SIMILR split — they were the old
+    single "Confirmed" tick, which now means SAME. Fill any NULL match_type so
+    previously-confirmed rows keep reading as SAME everywhere they appear."""
+    with engine.connect() as conn:
+        try:
+            conn.execute(text(
+                "UPDATE result_confirmations SET match_type='same' WHERE match_type IS NULL"
+            ))
+            conn.commit()
+        except Exception:
+            pass  # Table may not exist yet on a fresh DB — create_all handles that
+
+
 def init_db() -> Engine:
     """Initialize DB: create engine, tables, return engine."""
     global _engine, _SessionLocal
@@ -114,6 +129,7 @@ def init_db() -> Engine:
     _SessionLocal = sessionmaker(bind=_engine, autocommit=False, autoflush=False)
     Base.metadata.create_all(_engine)
     _run_migrations(_engine)
+    _backfill_match_type(_engine)
     _backfill_product_search_term()
     logger.info("Database initialized")
     return _engine

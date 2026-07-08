@@ -1010,11 +1010,12 @@
             <button type="button" @click="setSort(fpHistorySort, 'our')" class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200">
               Our $ <span x-text="sortIcon(fpHistorySort, 'our')"></span>
             </button>
-            <div class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden" title="Our projected cost = our price × 0.7">Proj $</div>
+            <div class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden" title="Our projected cost = our price × 0.7">Cost $</div>
             <button type="button" @click="setSort(fpHistorySort, 'price')" class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200" title="Competitor price">
               Comp $ <span x-text="sortIcon(fpHistorySort, 'price')"></span>
             </button>
-            <div class="w-16 flex-shrink-0 text-center uppercase whitespace-nowrap overflow-hidden" title="Tick after visiting the link and verifying the product &amp; price">Conf?</div>
+            <div class="w-16 flex-shrink-0 text-center uppercase whitespace-nowrap overflow-hidden" title="Tick if this is a similar / comparable product (not identical)">Similr</div>
+            <div class="w-16 flex-shrink-0 text-center uppercase whitespace-nowrap overflow-hidden" title="Tick after visiting the link and verifying this is the same product &amp; price">Same</div>
           </div>
           <div class="divide-y divide-gray-100 dark:divide-gray-700">
             <template x-for="r in historyFlatRows(findProductHistoryVisible(), fpHistorySort, fpHistoryLimit)" :key="r.id">
@@ -1048,12 +1049,18 @@
                 <!-- Competitor price -->
                 <span class="w-20 text-right flex-shrink-0 text-green-600 font-medium"
                   x-text="r.price != null ? '$' + Number(r.price).toFixed(2) : '—'"></span>
-                <!-- Confirmed checkbox + verified date -->
+                <!-- SIMILR checkbox (comparable, not identical) -->
                 <span class="w-16 flex-shrink-0 flex flex-col items-center">
                   <input type="checkbox" class="w-4 h-4 cursor-pointer"
-                    title="Tick after visiting the link and verifying the product is the same/comparable and the price is correct"
-                    :checked="isConfirmed(r.url)" @change="toggleConfirmed(r.url, $event.target.checked)" />
-                  <span x-show="isConfirmed(r.url)" class="text-[9px] text-gray-400 leading-tight mt-0.5 text-center"
+                    title="Tick if this is a similar / comparable product (not identical)"
+                    :checked="isSimilar(r.url)" @change="setMatch(r.url, 'similar', $event.target.checked)" />
+                </span>
+                <!-- SAME checkbox + verified date -->
+                <span class="w-16 flex-shrink-0 flex flex-col items-center">
+                  <input type="checkbox" class="w-4 h-4 cursor-pointer"
+                    title="Tick after visiting the link and verifying this is the same product and the price is correct"
+                    :checked="isSame(r.url)" @change="setMatch(r.url, 'same', $event.target.checked)" />
+                  <span x-show="isSame(r.url)" class="text-[9px] text-gray-400 leading-tight mt-0.5 text-center"
                     title="Date verified" x-text="confirmedAtLabel(r.url)"></span>
                 </span>
               </div>
@@ -1517,11 +1524,12 @@
             <button type="button" @click="setSort(bpHistorySort, 'our')" class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200">
               Our $ <span x-text="sortIcon(bpHistorySort, 'our')"></span>
             </button>
-            <div class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden" title="Our projected cost = our price × 0.7">Proj $</div>
+            <div class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden" title="Our projected cost = our price × 0.7">Cost $</div>
             <button type="button" @click="setSort(bpHistorySort, 'price')" class="w-20 flex-shrink-0 text-right uppercase whitespace-nowrap overflow-hidden hover:text-gray-600 dark:hover:text-gray-200" title="Competitor price">
               Comp $ <span x-text="sortIcon(bpHistorySort, 'price')"></span>
             </button>
-            <div class="w-16 flex-shrink-0 text-center uppercase whitespace-nowrap overflow-hidden" title="Tick after visiting the link and verifying the product &amp; price">Conf?</div>
+            <div class="w-16 flex-shrink-0 text-center uppercase whitespace-nowrap overflow-hidden" title="Tick if this is a similar / comparable product (not identical)">Similr</div>
+            <div class="w-16 flex-shrink-0 text-center uppercase whitespace-nowrap overflow-hidden" title="Tick after visiting the link and verifying this is the same product &amp; price">Same</div>
           </div>
           <div class="divide-y divide-gray-100 dark:divide-gray-700">
             <template x-for="r in historyFlatRows(beatPriceHistoryVisible(), bpHistorySort, bpHistoryLimit)" :key="r.id">
@@ -1550,12 +1558,18 @@
                 <!-- Competitor price -->
                 <span class="w-20 text-right flex-shrink-0 text-green-600 font-medium"
                   x-text="r.price != null ? '$' + Number(r.price).toFixed(2) : '—'"></span>
-                <!-- Confirmed checkbox + verified date -->
+                <!-- SIMILR checkbox (comparable, not identical) -->
                 <span class="w-16 flex-shrink-0 flex flex-col items-center">
                   <input type="checkbox" class="w-4 h-4 cursor-pointer"
-                    title="Tick after visiting the link and verifying the product is the same/comparable and the price is correct"
-                    :checked="isConfirmed(r.url)" @change="toggleConfirmed(r.url, $event.target.checked)" />
-                  <span x-show="isConfirmed(r.url)" class="text-[9px] text-gray-400 leading-tight mt-0.5 text-center"
+                    title="Tick if this is a similar / comparable product (not identical)"
+                    :checked="isSimilar(r.url)" @change="setMatch(r.url, 'similar', $event.target.checked)" />
+                </span>
+                <!-- SAME checkbox + verified date -->
+                <span class="w-16 flex-shrink-0 flex flex-col items-center">
+                  <input type="checkbox" class="w-4 h-4 cursor-pointer"
+                    title="Tick after visiting the link and verifying this is the same product and the price is correct"
+                    :checked="isSame(r.url)" @change="setMatch(r.url, 'same', $event.target.checked)" />
+                  <span x-show="isSame(r.url)" class="text-[9px] text-gray-400 leading-tight mt-0.5 text-center"
                     title="Date verified" x-text="confirmedAtLabel(r.url)"></span>
                 </span>
               </div>

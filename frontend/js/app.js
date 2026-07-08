@@ -2439,30 +2439,41 @@ function app() {
       return ourPrice != null ? `$${(Number(ourPrice) * 0.7).toFixed(2)}` : '—';
     },
 
-    // --- "Confirmed" per-result checkboxes (keyed by URL, saved server-side) ---
-    // confirmedRows maps url -> verified_at ISO timestamp; a key exists only while
-    // the result is confirmed.
-    isConfirmed(url) { return !!this.confirmedRows[url]; },
+    // --- SAME / SIMILR per-result checkboxes (keyed by URL, saved server-side) ---
+    // confirmedRows maps url -> { type: 'same'|'similar', verified_at }. A key
+    // exists only while a result is classified; SAME and SIMILR are mutually
+    // exclusive (one stored value) and both may be left unchecked (no key).
+    matchType(url) { return this.confirmedRows[url]?.type || null; },
+    isSame(url) { return this.matchType(url) === 'same'; },
+    isSimilar(url) { return this.matchType(url) === 'similar'; },
+    // Back-compat: the live-results "Confirmed" checkboxes treat confirmed == SAME.
+    isConfirmed(url) { return this.isSame(url); },
     confirmedAtLabel(url) {
-      const ts = this.confirmedRows[url];
+      const ts = this.confirmedRows[url]?.verified_at;
       return ts ? new Date(ts).toLocaleDateString() : '';
     },
-    async toggleConfirmed(url, checked) {
+    // Set (or clear) a URL's match type. Checking one box replaces whatever was
+    // there; unchecking the active box clears it. Mutual exclusivity is automatic
+    // because a single value is stored per URL.
+    async setMatch(url, type, checked) {
       if (!url) return;
+      const desired = checked ? type : null;
       // Optimistic update, then reconcile with the server's authoritative timestamp.
       const prev = this.confirmedRows[url];
-      if (checked) this.confirmedRows[url] = new Date().toISOString();
+      if (desired) this.confirmedRows[url] = { type: desired, verified_at: new Date().toISOString() };
       else delete this.confirmedRows[url];
       try {
         const res = await this.api('/api/confirmations', {
-          method: 'POST', body: JSON.stringify({ url, confirmed: checked }),
+          method: 'POST', body: JSON.stringify({ url, match_type: desired }),
         });
-        if (checked && res?.verified_at) this.confirmedRows[url] = res.verified_at;
+        if (desired && res?.verified_at) this.confirmedRows[url] = { type: desired, verified_at: res.verified_at };
       } catch (e) {
         if (prev !== undefined) this.confirmedRows[url] = prev; else delete this.confirmedRows[url];
-        this.toast('Could not save confirmation: ' + e.message, 'error');
+        this.toast('Could not save selection: ' + e.message, 'error');
       }
     },
+    // Back-compat shim for the untouched live-results "Confirmed" checkboxes.
+    toggleConfirmed(url, checked) { return this.setMatch(url, 'same', checked); },
     async loadConfirmedRows() {
       try {
         const res = await this.api('/api/confirmations');

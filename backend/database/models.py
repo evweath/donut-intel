@@ -526,13 +526,16 @@ class BeatPricePatternStats(Base):
 
 
 class ResultConfirmation(Base):
-    """User-verified search results. A row exists only while a result is confirmed
-    (the "Confirmed" checkbox on the product-search pages). Keyed by the result's
-    URL so the same link reads as confirmed wherever it appears across pages.
+    """User-classified search results. A row exists only while a result is
+    classified (a SAME or SIMILR checkbox on the product-search pages). Keyed by
+    the result's URL so the same link reads the same wherever it appears across
+    pages. `match_type` is 'same' or 'similar' — the two are mutually exclusive
+    (one column, one value); an absent row means neither is checked.
     `verified_at` is the day/time the user ticked it."""
     __tablename__ = "result_confirmations"
 
     url = Column(Text, primary_key=True)
+    match_type = Column(Text, nullable=False, default="same")
     verified_at = Column(DateTime, default=func.now(), nullable=False)
 
 

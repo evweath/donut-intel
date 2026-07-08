@@ -2018,12 +2018,16 @@ def list_search_engines():
 # ---------------------------------------------------------------------------
 @router.get("/api/confirmations")
 def list_confirmations(db: Session = Depends(get_db_session)):
-    """Return all confirmed result URLs and when they were verified, as a
-    {url: verified_at_iso} map for the frontend to render checkboxes + dates."""
+    """Return every classified result URL as a
+    {url: {"type": "same"|"similar", "verified_at": iso}} map for the frontend to
+    render the SAME / SIMILR checkboxes + dates."""
     rows = db.query(ResultConfirmation).all()
     return {
         "confirmations": {
-            r.url: (r.verified_at.isoformat() if r.verified_at else None)
+            r.url: {
+                "type": r.match_type or "same",
+                "verified_at": (r.verified_at.isoformat() if r.verified_at else None),
+            }
             for r in rows
         }
     }
@@ -2031,30 +2035,38 @@ def list_confirmations(db: Session = Depends(get_db_session)):
 
 class ConfirmationRequest(BaseModel):
     url: str
-    confirmed: bool
+    # 'same' or 'similar' to classify; None (or omitted) to clear both. The two
+    # are mutually exclusive — a single stored value can't hold both at once.
+    match_type: Optional[str] = None
 
 
 @router.post("/api/confirmations")
 def set_confirmation(req: ConfirmationRequest, db: Session = Depends(get_db_session)):
-    """Confirm (upsert with a fresh verified_at) or un-confirm (delete) a result URL."""
+    """Set a result URL's match type (upsert with a fresh verified_at) or clear it
+    (delete the row) when match_type is None."""
     url = (req.url or "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="url is required")
 
+    match_type = req.match_type
+    if match_type is not None and match_type not in ("same", "similar"):
+        raise HTTPException(status_code=400, detail="match_type must be 'same', 'similar', or null")
+
     existing = db.query(ResultConfirmation).filter(ResultConfirmation.url == url).first()
-    if req.confirmed:
+    if match_type:
         if existing:
+            existing.match_type = match_type
             existing.verified_at = datetime.utcnow()
         else:
-            existing = ResultConfirmation(url=url, verified_at=datetime.utcnow())
+            existing = ResultConfirmation(url=url, match_type=match_type, verified_at=datetime.utcnow())
             db.add(existing)
         db.commit()
-        return {"url": url, "confirmed": True, "verified_at": existing.verified_at.isoformat()}
+        return {"url": url, "match_type": match_type, "verified_at": existing.verified_at.isoformat()}
     else:
         if existing:
             db.delete(existing)
             db.commit()
-        return {"url": url, "confirmed": False, "verified_at": None}
+        return {"url": url, "match_type": None, "verified_at": None}
 
 
 class FindProductRequest(BaseModel):
