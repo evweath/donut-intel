@@ -106,6 +106,7 @@ function app() {
     bpHistoryLimit: 50,
     fpHistorySelected: {},                     // result id -> true (rows ticked for deletion)
     bpHistorySelected: {},
+    bpGroupOpen: {},                           // beat-price search id -> expanded? (grouped-by-search overview)
     // Batch-boundary pause state (find 10, ask to continue). Pause only kicks in
     // when the user kept the default target (<=10); a larger target runs straight.
     findProductTarget: 10,
@@ -1292,6 +1293,23 @@ function app() {
     historyTotalRows(searches) {
       return (searches || []).reduce((n, s) => n + (s.results?.length || 0), 0);
     },
+
+    // --- Beat-Price "grouped by search" overview (collapsible per search) -----
+    // Human label for a search group: the free-text query the user typed, else
+    // the selected catalog products' search terms (what a catalog search actually
+    // queried), else a summary of any other search params.
+    bpGroupLabel(s) {
+      const desc = (s?.description || '').trim();
+      if (desc) return desc;
+      const terms = (s?.product_search_terms || []).filter(Boolean);
+      if (terms.length) return terms.join(' · ');
+      const parts = [];
+      if (s?.model_number) parts.push(s.model_number);
+      if (s?.category) parts.push(s.category);
+      if (parts.length) return parts.join(' · ');
+      return 'Catalog products (no search text)';
+    },
+    toggleBpGroup(id) { this.bpGroupOpen[id] = !this.bpGroupOpen[id]; },
 
     async deleteFindProductResult(resultId) {
       try {

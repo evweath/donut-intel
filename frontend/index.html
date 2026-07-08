@@ -1492,6 +1492,51 @@
           <span x-text="beatPriceHistoryOpen ? '▲' : '▼'" class="text-gray-400 text-xs"></span>
         </button>
         <div x-show="beatPriceHistoryOpen" class="border-t dark:border-gray-700">
+          <!-- Grouped-by-search overview: one collapsible line per search, showing the
+               full search text. Expanding reveals that search's result rows. -->
+          <div class="px-4 pt-2 pb-1 text-[10px] uppercase tracking-wide text-gray-400">By search</div>
+          <div class="divide-y divide-gray-100 dark:divide-gray-700 border-b dark:border-gray-700">
+            <template x-for="s in beatPriceHistoryVisible()" :key="s.id">
+              <div>
+                <!-- Group header line: full search text; click to expand/collapse -->
+                <button type="button" @click="toggleBpGroup(s.id)"
+                  class="w-full flex items-center gap-2 px-4 py-2 text-xs text-left hover:bg-gray-50 dark:hover:bg-gray-700/30">
+                  <span class="w-3 flex-shrink-0 text-gray-400" x-text="bpGroupOpen[s.id] ? '▼' : '▶'"></span>
+                  <span class="flex-1 min-w-0 truncate font-medium text-gray-700 dark:text-gray-200"
+                    :title="bpGroupLabel(s)" x-text="bpGroupLabel(s)"></span>
+                  <span class="flex-shrink-0 text-gray-400" x-text="new Date(s.searched_at).toLocaleDateString()"></span>
+                  <span class="flex-shrink-0 text-gray-400 w-16 text-right"
+                    x-text="(s.results?.length || 0) + (((s.results?.length || 0) === 1) ? ' result' : ' results')"></span>
+                </button>
+                <!-- Group body: this search's result rows -->
+                <div x-show="bpGroupOpen[s.id]" class="bg-gray-50/40 dark:bg-gray-900/20 divide-y divide-gray-100 dark:divide-gray-700/60">
+                  <template x-for="r in (s.results || [])" :key="r.id">
+                    <div class="pl-9 pr-4 py-1.5 flex items-center gap-2 text-xs">
+                      <a :href="r.url" target="_blank" class="flex-1 min-w-0 text-blue-500 hover:underline truncate" x-text="r.title || r.domain"></a>
+                      <span class="w-14 text-right flex-shrink-0 text-gray-400" title="Match %"
+                        x-text="r.fuzzy_score != null ? r.fuzzy_score + '%' : '—'"></span>
+                      <span class="w-20 text-right flex-shrink-0 text-orange-600 font-medium" title="Our price"
+                        x-text="r.our_price != null ? '$' + Number(r.our_price).toFixed(2) : '—'"></span>
+                      <span class="w-20 text-right flex-shrink-0 text-blue-600 dark:text-blue-400 font-medium" title="Our projected cost = our price × 0.7"
+                        x-text="fmtProjected(r.our_price)"></span>
+                      <span class="w-20 text-right flex-shrink-0 text-green-600 font-medium" title="Competitor price"
+                        x-text="r.price != null ? '$' + Number(r.price).toFixed(2) : '—'"></span>
+                      <span class="w-16 flex-shrink-0 flex justify-center">
+                        <input type="checkbox" class="w-4 h-4 cursor-pointer"
+                          title="Tick if this is a similar / comparable product (not identical)"
+                          :checked="isSimilar(r.url)" @change="setMatch(r.url, 'similar', $event.target.checked)" />
+                      </span>
+                      <span class="w-16 flex-shrink-0 flex justify-center">
+                        <input type="checkbox" class="w-4 h-4 cursor-pointer"
+                          title="Tick after visiting the link and verifying this is the same product and the price is correct"
+                          :checked="isSame(r.url)" @change="setMatch(r.url, 'same', $event.target.checked)" />
+                      </span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
           <!-- One flat, globally-sortable table of every result line (newest first). -->
           <div class="px-4 py-1.5 text-[10px] text-gray-400"
             x-text="'Showing ' + Math.min(historyTotalRows(beatPriceHistoryVisible()), bpHistoryLimit) + ' of ' + historyTotalRows(beatPriceHistoryVisible()) + ' result lines (newest first)'"></div>

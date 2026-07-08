@@ -2611,15 +2611,26 @@ def beat_price_history(limit: int = 20, db: Session = Depends(get_db_session)):
         .limit(limit)
         .all()
     )
-    # Resolve "our price" for every result via its catalog product, in one query.
+    # Resolve "our price" and the search term for every result via its catalog
+    # product, in one query. Catalog-initiated searches store no free-text
+    # `description`; their "full text" is the selected products' search terms.
     product_ids = {r.product_id for s in searches for r in s.results if r.product_id}
     our_price_by_pid = {}
+    term_by_pid = {}
     if product_ids:
         for p in db.query(Product).filter(Product.id.in_(product_ids)).all():
             our_price_by_pid[p.id] = p.price_canonical
+            term_by_pid[p.id] = (p.product_search_term or p.canonical_title or "").strip()
 
     out = []
     for s in searches:
+        # Distinct product search terms behind this group (order-preserving),
+        # so the UI can label catalog searches with what was actually searched.
+        product_terms = []
+        for r in s.results:
+            t = term_by_pid.get(r.product_id)
+            if t and t not in product_terms:
+                product_terms.append(t)
         out.append({
             "id": s.id,
             "description": s.description,
@@ -2629,6 +2640,7 @@ def beat_price_history(limit: int = 20, db: Session = Depends(get_db_session)):
             "price_max": s.price_max,
             "characteristics": json.loads(s.characteristics_json) if s.characteristics_json else {},
             "searched_at": s.searched_at.isoformat() if s.searched_at else None,
+            "product_search_terms": product_terms,
             "results": [
                 {
                     "id": r.id,
