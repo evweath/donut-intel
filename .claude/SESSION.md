@@ -1,4 +1,26 @@
-# Session State — 2026-06-09T21:30Z
+# Session State — 2026-10-28
+
+## Store menus, catalog comparison, and individual transfer
+
+- Added **Store Menus & Sync** to the dashboard with live Shopify scans, menu comparison, product comparison, menu coverage/duplicate audits, and per-product field transfer.
+- Added persistent snapshots under `data/scan_cache/`; products are matched across stores by Shopify handle.
+- Catalog comparison covers scalar product fields, options, variants/prices, images, metafields, and collection membership.
+- Menu audits include nested items, direct product links, custom/smart collection representation, missing products, duplicate product links, and unresolved links.
+- Transfers require preview + confirmation and operate on one selected product/field set only. Creation is optional, destination variants are preserved, and image deletion requires separate opt-in.
+- Shopify compatibility lessons: query active/draft/archived separately (`status=any` returned zero); smart-collection products must be read through GraphQL; bulk metafield reads use `/metafields.json` with `owner_resource=product`.
+- Verification: 44 tests pass; full browser workflow passes through menu audit, product comparison, and real transfer preview without writes. Live menu reads succeed on all three stores. Full catalog scans verified on donut-equipment (2,826) and donut-supplies (2,746); bakerywholesalers remained unreachable with `All connection attempts failed` after a retry. Comparison APIs show successful snapshots and mark failed stores unavailable rather than blocking all results.
+
+## Resume tomorrow — 2026-10-29
+
+- Repo/branch: `/Users/evw/dev/domainCompv3`, `search-engine-selection`; GitHub remote is `origin` (`evweath/donut-intel`).
+- Local pre-commit backup: `/Users/evw/dev/local-backups/domainCompv3/domainCompv3-20261028-182530.tar.gz` (verified, 2,789 entries, 189,364,489 bytes). Includes source, Git history, DB, logs, and live scan snapshots; credentials, private keys, and regenerable environments are excluded.
+- Start with `cd /Users/evw/dev/domainCompv3 && bash start.sh`, then open `https://localhost:8743` → **Store Menus & Sync**. domainSync uses port 8800 if needed.
+- Run checks with `.venv/bin/python -m pytest tests -q` and `node --check frontend/js/app.js`; expected baseline is 44 passing tests.
+- Retry `bakerywholesalers.com` when its connection is available. Its last error was `All connection attempts failed`; the other two stores have valid snapshots and remain usable. Deselect it for an all-green comparison or retry its scan individually.
+- No live product write was performed. Before the first real transfer, review one product and a small field set, verify the preview carefully, and only then approve the write.
+- `.claude/settings.local.json` and `logs/server.out` are local-only changes and are intentionally not included in the feature commit. `data/scan_cache/` is ignored by Git but included in the local backup.
+
+# Previous Session State — 2026-06-09T21:30Z
 
 ## Accomplished This Session
 

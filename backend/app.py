@@ -230,6 +230,8 @@ async def _dispatch_webhook(event: str, payload: dict):
 # ---------------------------------------------------------------------------
 
 app.include_router(router)
+from backend.api.catalog_routes import router as catalog_router
+app.include_router(catalog_router)
 
 # ---------------------------------------------------------------------------
 # Static files and SPA (F31)

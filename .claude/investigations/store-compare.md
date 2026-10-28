@@ -41,3 +41,11 @@ Store Compare page
 
 - The comprehensive filter panel added 2026-05-27 — does it correctly handle products that exist on only one source? (e.g., DS-only product with no DE counterpart)
 - Image diff detection: are we comparing image URLs or actual image content? URL changes on re-upload would trigger false diffs.
+
+## Live snapshot comparison (2026-10-28)
+
+The new Store Menus & Sync page compares live Shopify snapshots keyed by handle rather than the scraped DB projection. It compares title, HTML description, vendor, type, handle, status, tags, template/scope, options, variants (including prices and inventory), images, metafields, and collection membership. Store-specific IDs and timestamps are removed before comparison.
+
+- Read products separately with `status=active`, `draft`, and `archived`: on 2026-10-28 `status=any` returned zero products on the live stores despite each individual status returning results.
+- Smart-collection membership uses GraphQL `collection(id:) { products(...) }`. The REST `/smart_collections/{id}/products.json` path returned 404, and `/products.json?collection_id=...` incorrectly returned empty for a collection that GraphQL showed had 59 products.
+- Use bulk `/metafields.json?metafield[owner_resource]=product` rather than one request per product, with per-product fallback on failure.

@@ -72,3 +72,13 @@ source stores (2"-wide box, polls every 3s while Settings is open).
 
 - Does the Live Sync pipeline handle partial failures? If 3 of 10 products fail to sync, does it report which ones?
 - The CSV export — is it used as input to the Live Sync, or are they independent flows?
+
+## Individual product transfer (2026-10-28)
+
+The replacement transfer flow is deliberately not a whole-store sync. A user selects one product, source/destination stores, and individual fields; the app previews source/destination values and requires explicit confirmation. Execution re-reads the live source product and looks up the live destination by handle across active, draft, and archived statuses.
+
+- Existing destination variants are all included in variant updates so unselected variants cannot be removed. Variants are matched by SKU, then option values.
+- Product creation is separately confirmed and always carries required title/handle/option structure.
+- Image additions and destructive image replacement are separate choices.
+- Metafields are written individually; custom collections are created/reused as needed, while smart collections are reported as rule-based rather than manually assigned.
+- Responses report per-operation errors and recommend a destination rescan for derived data.

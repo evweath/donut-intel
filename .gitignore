@@ -13,6 +13,7 @@ data/*.db-shm
 data/*.db-wal
 data/*.db.bak-*
 data/*.bak-*
+data/scan_cache/
 
 # Logs and exports
 logs/*.log

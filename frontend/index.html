@@ -61,7 +61,7 @@
     <nav class="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
       <template x-for="item in navItems" :key="item.id">
         <button
-          @click="currentView = item.id; item.id === 'products' && loadProducts(1); item.id === 'competitors' && loadCompetitors(1); item.id === 'pricing' && (priceMatrixFilters.manufacturer || priceMatrixFilters.category || priceMatrixFilters.source_site || priceMatrixFilters.search ? loadPriceMatrix(1) : (priceMatrixHasSearched = false)); item.id === 'scheduler' && (loadJobs(), loadEmailSettings()); item.id === 'export' && loadExportHistory(); item.id === 'find-product' && (findProductSearchCatalog(), loadFindProductHistory()); item.id === 'beat-price' && (beatPriceSearchCatalog(), loadBeatPriceHistory())"
+          @click="currentView = item.id; item.id === 'products' && loadProducts(1); item.id === 'competitors' && loadCompetitors(1); item.id === 'pricing' && (priceMatrixFilters.manufacturer || priceMatrixFilters.category || priceMatrixFilters.source_site || priceMatrixFilters.search ? loadPriceMatrix(1) : (priceMatrixHasSearched = false)); item.id === 'scheduler' && (loadJobs(), loadEmailSettings()); item.id === 'export' && loadExportHistory(); item.id === 'store-catalog' && initStoreCatalog(); item.id === 'find-product' && (findProductSearchCatalog(), loadFindProductHistory()); item.id === 'beat-price' && (beatPriceSearchCatalog(), loadBeatPriceHistory())"
           :class="currentView === item.id
             ? 'bg-orange-600 text-white'
             : 'text-gray-300 hover:bg-gray-700 hover:text-white'"
@@ -2739,6 +2739,282 @@
       </div>
     </div>
 
+    <!-- ===== STORE CATALOG & MENU SYNC VIEW ===== -->
+    <div x-show="currentView === 'store-catalog'" class="p-6">
+      <div class="flex items-center justify-between mb-5">
+        <div>
+          <h2 class="text-2xl font-bold">Store Menus &amp; Product Sync</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Scan live Shopify catalogs and navigation, compare stores, audit menu coverage, and transfer individual product fields.</p>
+        </div>
+        <button @click="refreshCatalogView()" :disabled="catalogLoading"
+          class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 px-4 py-2 rounded-lg text-sm">Refresh</button>
+      </div>
+
+      <div class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 mb-5">
+        <div class="flex flex-wrap items-center gap-4 mb-3">
+          <template x-for="store in catalogStores" :key="store.domain">
+            <label class="flex items-start gap-2 text-sm cursor-pointer">
+              <input type="checkbox" x-model="catalogSelected[store.domain]" class="mt-1 accent-orange-500" />
+              <span>
+                <span class="font-medium" x-text="store.name"></span>
+                <span class="block text-xs text-gray-400">
+                  <span x-text="store.domain"></span>
+                  <span x-show="store.scan"> · <span x-text="store.scan?.product_count"></span> products, <span x-text="store.scan?.menu_count"></span> menus</span>
+                  <span x-show="!store.credentials_configured"> · credentials missing</span>
+                </span>
+              </span>
+            </label>
+          </template>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <button @click="startCatalogScan()" :disabled="catalogScan.running || catalogDomains().length === 0"
+            class="bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium">
+            <span x-text="catalogScan.running ? 'Scanning…' : 'Scan selected stores'"></span>
+          </button>
+          <span class="text-xs text-gray-500 dark:text-gray-400"
+            x-text="catalogScan.running ? `${catalogScan.current_domain || ''}: ${catalogScan.stage || ''} ${catalogScan.stage_done || 0}/${catalogScan.stage_total || 0}` : `${catalogScan.done || 0}/${catalogScan.total || 0} stores complete`"></span>
+        </div>
+        <template x-for="entry in Object.entries(catalogScan.results || {})" :key="entry[0]">
+          <div class="mt-2 text-xs" :class="entry[1].status === 'error' ? 'text-red-500' : 'text-green-600'">
+            <span x-text="entry[0]"></span>:
+            <span x-text="entry[1].status === 'error' ? entry[1].error : `${entry[1].products} products, ${entry[1].menus} menus`"></span>
+            <span x-show="entry[1].menu_error" class="text-amber-600" x-text="' — menu error: ' + entry[1].menu_error"></span>
+          </div>
+        </template>
+      </div>
+
+      <div x-show="catalogMenuData.unavailable?.length || catalogMenuComparison.unavailable?.length || catalogProducts.unavailable?.length"
+        class="bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 rounded-lg p-3 mb-4 text-sm">
+        Some selected stores have no successful catalog snapshot. Available results are shown; check the scan error or deselect the unavailable store.
+      </div>
+
+      <div class="flex gap-2 border-b border-gray-200 dark:border-gray-700 mb-5">
+        <button @click="catalogTab='menus'; loadCatalogMenus()"
+          :class="catalogTab === 'menus' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500'"
+          class="px-4 py-2 border-b-2 text-sm font-medium">Menu scans &amp; audits</button>
+        <button @click="catalogTab='menu-compare'; loadCatalogMenuComparison()"
+          :class="catalogTab === 'menu-compare' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500'"
+          class="px-4 py-2 border-b-2 text-sm font-medium">Menu differences</button>
+        <button @click="catalogTab='products'; loadCatalogProducts(1)"
+          :class="catalogTab === 'products' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500'"
+          class="px-4 py-2 border-b-2 text-sm font-medium">Product differences &amp; transfer</button>
+      </div>
+
+      <div x-show="catalogTab === 'menus'">
+        <div x-show="Object.keys(catalogMenuData.stores || {}).length === 0" class="bg-white dark:bg-gray-800 rounded-xl shadow p-10 text-center text-gray-400">
+          Scan the selected stores to load their navigation and catalog analysis.
+        </div>
+        <template x-for="(data, domain) in catalogMenuData.stores" :key="domain">
+          <section class="bg-white dark:bg-gray-800 rounded-xl shadow p-4 mb-5">
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <h3 class="font-semibold text-lg" x-text="domain"></h3>
+              <div class="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-gray-400">
+                <span><strong x-text="data.analysis.counts.menus"></strong> menus</span>
+                <span><strong x-text="data.analysis.counts.menu_items"></strong> menu items</span>
+                <span><strong x-text="data.analysis.counts.catalog_products"></strong> products</span>
+                <span class="text-amber-600"><strong x-text="data.analysis.counts.missing_products"></strong> not represented</span>
+                <span class="text-red-500"><strong x-text="data.analysis.counts.duplicate_products"></strong> duplicated</span>
+              </div>
+            </div>
+            <div x-show="data.menu_error" class="bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 rounded-lg p-3 mb-4 text-sm">
+              Navigation could not be read. Grant the Shopify app navigation-read access and rescan. <span x-text="data.menu_error"></span>
+            </div>
+
+            <details class="mb-4 border border-gray-200 dark:border-gray-700 rounded-lg">
+              <summary class="cursor-pointer px-3 py-2 text-sm font-medium">Scanned menu structure</summary>
+              <div class="max-h-72 overflow-auto p-3">
+                <template x-for="row in flattenCatalogMenus(data.menus)" :key="row.id">
+                  <div class="grid grid-cols-1 md:grid-cols-3 gap-2 py-1 border-b border-gray-100 dark:border-gray-700 text-xs">
+                    <span x-text="row.menu + ': ' + row.path"></span>
+                    <span class="text-gray-400" x-text="row.type"></span>
+                    <span class="font-mono break-all" x-text="row.url"></span>
+                  </div>
+                </template>
+              </div>
+            </details>
+
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <details open class="border border-amber-200 dark:border-amber-800 rounded-lg">
+                <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-amber-700 dark:text-amber-300">Products not represented in the menu (<span x-text="data.analysis.missing_products.length"></span>)</summary>
+                <div class="max-h-80 overflow-auto p-3">
+                  <template x-for="product in data.analysis.missing_products" :key="product.handle">
+                    <div class="flex justify-between gap-3 py-1 text-xs border-b border-gray-100 dark:border-gray-700">
+                      <span x-text="product.title"></span><span class="text-gray-400" x-text="product.status"></span>
+                    </div>
+                  </template>
+                  <div x-show="data.analysis.missing_products.length === 0" class="text-sm text-green-600">Every catalog product is represented directly or through a linked collection.</div>
+                </div>
+              </details>
+
+              <details open class="border border-red-200 dark:border-red-800 rounded-lg">
+                <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-red-600 dark:text-red-300">Products linked two or more times (<span x-text="data.analysis.duplicate_products.length"></span>)</summary>
+                <div class="max-h-80 overflow-auto p-3">
+                  <template x-for="product in data.analysis.duplicate_products" :key="product.handle">
+                    <div class="mb-3 text-xs">
+                      <div class="font-medium"><span x-text="product.title"></span> — <span x-text="product.count"></span> occurrences</div>
+                      <template x-for="item in product.occurrences" :key="item.item_id">
+                        <div class="text-gray-500 dark:text-gray-400 pl-3" x-text="item.menu_title + ': ' + item.path"></div>
+                      </template>
+                    </div>
+                  </template>
+                  <div x-show="data.analysis.duplicate_products.length === 0" class="text-sm text-green-600">No duplicate direct product links found.</div>
+                </div>
+              </details>
+            </div>
+            <div x-show="data.analysis.unresolved_product_items.length" class="mt-4 text-xs text-red-500">
+              <strong>Unresolved product links:</strong>
+              <template x-for="item in data.analysis.unresolved_product_items" :key="item.item_id">
+                <div x-text="item.menu_title + ': ' + item.path + ' — ' + item.url"></div>
+              </template>
+            </div>
+          </section>
+        </template>
+      </div>
+
+      <div x-show="catalogTab === 'menu-compare'" class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-semibold">Navigation differences</h3>
+          <label class="text-sm flex items-center gap-2"><input type="checkbox" x-model="catalogMenuDiffOnly" class="accent-orange-500" /> Differences only</label>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="text-left text-xs text-gray-500 border-b dark:border-gray-700">
+              <th class="py-2 pr-4">Menu / item path</th>
+              <template x-for="domain in catalogMenuComparison.domains" :key="domain"><th class="py-2 px-3" x-text="domain"></th></template>
+            </tr></thead>
+            <tbody>
+              <template x-for="row in (catalogMenuComparison.items || []).filter(r => !catalogMenuDiffOnly || r.different)" :key="row.menu_handle + row.path">
+                <tr class="border-b border-gray-100 dark:border-gray-700 align-top">
+                  <td class="py-2 pr-4"><div class="font-medium" x-text="row.path"></div><div class="text-xs text-gray-400" x-text="row.menu_handle"></div></td>
+                  <template x-for="domain in catalogMenuComparison.domains" :key="domain">
+                    <td class="py-2 px-3 text-xs break-all" :class="!row.stores[domain] ? 'text-red-500' : ''">
+                      <span x-show="row.stores[domain]" x-text="row.stores[domain]?.title + ' — ' + row.stores[domain]?.url"></span>
+                      <span x-show="!row.stores[domain]">Missing</span>
+                    </td>
+                  </template>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+        <div x-show="(catalogMenuComparison.items || []).filter(r => !catalogMenuDiffOnly || r.different).length === 0" class="py-8 text-center text-green-600">No menu differences found.</div>
+      </div>
+
+      <div x-show="catalogTab === 'products'" class="bg-white dark:bg-gray-800 rounded-xl shadow p-4">
+        <div class="flex flex-wrap items-end gap-3 mb-4">
+          <div class="flex-1 min-w-64">
+            <label class="block text-xs text-gray-500 mb-1">Search title, handle, vendor, or SKU</label>
+            <input x-model="catalogProductSearch" @keyup.enter="loadCatalogProducts(1)" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600" />
+          </div>
+          <label class="text-sm flex items-center gap-2 pb-2"><input type="checkbox" x-model="catalogDifferencesOnly" @change="loadCatalogProducts(1)" class="accent-orange-500" /> Differences only</label>
+          <button @click="loadCatalogProducts(1)" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm">Compare</button>
+        </div>
+        <div class="text-xs text-gray-500 mb-3"><span x-text="catalogProducts.total || 0"></span> products found. Products are matched across stores by Shopify handle.</div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead><tr class="text-left text-xs text-gray-500 border-b dark:border-gray-700">
+              <th class="py-2 pr-4">Product</th><th class="py-2 px-3">Differences</th><th class="py-2 px-3">Missing from</th><th class="py-2 pl-3 text-right">Action</th>
+            </tr></thead>
+            <tbody>
+              <template x-for="group in catalogProducts.products" :key="group.handle">
+                <tr class="border-b border-gray-100 dark:border-gray-700 align-top">
+                  <td class="py-3 pr-4"><div class="font-medium" x-text="group.title"></div><div class="text-xs text-gray-400" x-text="group.handle"></div></td>
+                  <td class="py-3 px-3">
+                    <div class="flex flex-wrap gap-1">
+                      <template x-for="field in group.difference_fields" :key="field"><span class="bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300 px-2 py-0.5 rounded text-xs" x-text="catalogFieldLabel(field)"></span></template>
+                      <span x-show="group.difference_fields.length === 0" class="text-green-600 text-xs">Same details</span>
+                    </div>
+                  </td>
+                  <td class="py-3 px-3 text-xs text-red-500" x-text="group.missing.join(', ') || '—'"></td>
+                  <td class="py-3 pl-3 text-right"><button @click="openCatalogProduct(group)" class="bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 px-3 py-1.5 rounded text-xs">Review / Transfer</button></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+        <div class="flex items-center justify-between mt-4 text-sm">
+          <button @click="loadCatalogProducts(catalogProducts.page - 1)" :disabled="catalogProducts.page <= 1" class="disabled:opacity-40 px-3 py-1 rounded bg-gray-200 dark:bg-gray-700">Previous</button>
+          <span>Page <span x-text="catalogProducts.page"></span> of <span x-text="catalogProducts.pages"></span></span>
+          <button @click="loadCatalogProducts(catalogProducts.page + 1)" :disabled="catalogProducts.page >= catalogProducts.pages" class="disabled:opacity-40 px-3 py-1 rounded bg-gray-200 dark:bg-gray-700">Next</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Individual product comparison and transfer review -->
+    <div x-show="catalogSelectedProduct" x-cloak class="fixed inset-0 z-[70] overflow-y-auto bg-black/60 p-4">
+      <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-7xl mx-auto my-8 p-6">
+        <div class="flex items-start justify-between gap-4 mb-5">
+          <div><h3 class="text-xl font-bold" x-text="catalogSelectedProduct?.title"></h3><div class="text-sm text-gray-400" x-text="catalogSelectedProduct?.handle"></div></div>
+          <button @click="closeCatalogProduct()" class="text-gray-400 hover:text-gray-700 dark:hover:text-white text-xl">×</button>
+        </div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <section>
+            <h4 class="font-semibold mb-3">Differences between stores</h4>
+            <div class="space-y-3 max-h-[60vh] overflow-y-auto pr-2">
+              <template x-for="difference in catalogSelectedProduct?.differences || []" :key="difference.field">
+                <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+                  <div class="font-medium text-sm mb-2" x-text="difference.label"></div>
+                  <template x-for="(value, domain) in difference.values" :key="domain">
+                    <div class="mb-2"><div class="text-xs font-semibold text-orange-500" x-text="domain"></div><pre class="whitespace-pre-wrap break-words text-xs bg-gray-50 dark:bg-gray-900 rounded p-2" x-text="catalogValue(value)"></pre></div>
+                  </template>
+                </div>
+              </template>
+              <div x-show="(catalogSelectedProduct?.differences || []).length === 0" class="text-green-600 text-sm">No differing fields. The product may be missing from one or more stores.</div>
+            </div>
+            <details class="mt-4">
+              <summary class="cursor-pointer text-sm font-medium">Full normalized details for every store</summary>
+              <template x-for="(details, domain) in catalogSelectedProduct?.details || {}" :key="domain">
+                <div class="mt-2"><div class="text-xs font-semibold text-orange-500" x-text="domain"></div><pre class="whitespace-pre-wrap break-words text-xs bg-gray-50 dark:bg-gray-900 rounded p-2 max-h-64 overflow-auto" x-text="catalogValue(details)"></pre></div>
+              </template>
+            </details>
+          </section>
+
+          <section>
+            <h4 class="font-semibold mb-3">Transfer this product’s selected details</h4>
+            <div class="grid grid-cols-2 gap-3 mb-3">
+              <div><label class="block text-xs text-gray-500 mb-1">Source store</label><select x-model="catalogTransferForm.source_domain" @change="catalogTransferPreview=null" class="w-full border rounded px-2 py-2 text-sm dark:bg-gray-700 dark:border-gray-600"><template x-for="domain in catalogTransferDomains()" :key="domain"><option :value="domain" x-text="domain"></option></template></select></div>
+              <div><label class="block text-xs text-gray-500 mb-1">Destination store</label><select x-model="catalogTransferForm.destination_domain" @change="catalogTransferPreview=null" class="w-full border rounded px-2 py-2 text-sm dark:bg-gray-700 dark:border-gray-600"><template x-for="domain in catalogTransferDomains()" :key="domain"><option :value="domain" x-text="domain"></option></template></select></div>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-56 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg p-3 mb-3">
+              <template x-for="field in catalogTransferFields" :key="field.key">
+                <label class="flex items-center gap-2 text-xs"><input type="checkbox" :value="field.key" x-model="catalogTransferForm.fields" @change="catalogTransferPreview=null" class="accent-orange-500" /><span x-text="field.label"></span></label>
+              </template>
+            </div>
+            <div class="space-y-2 mb-3 text-xs">
+              <label class="flex items-center gap-2"><input type="checkbox" x-model="catalogTransferForm.create_if_missing" @change="catalogTransferPreview=null" class="accent-orange-500" /> Create this one product if it is missing from the destination</label>
+              <label class="flex items-center gap-2 text-red-500"><input type="checkbox" x-model="catalogTransferForm.replace_images" @change="catalogTransferPreview=null" class="accent-red-500" /> Also delete destination images that are absent from the source</label>
+            </div>
+            <button @click="previewCatalogTransfer()" :disabled="catalogTransferBusy" class="bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium">Review transfer</button>
+
+            <div x-show="catalogTransferPreview" class="mt-4 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+              <div class="font-medium text-sm mb-2">Preview: <span x-text="catalogTransferPreview?.action"></span> one product</div>
+              <template x-for="warning in catalogTransferPreview?.warnings || []" :key="warning"><div class="text-xs text-amber-600 mb-1" x-text="warning"></div></template>
+              <div class="max-h-56 overflow-y-auto space-y-2 my-3">
+                <template x-for="operation in catalogTransferPreview?.operations || []" :key="operation.field">
+                  <div class="text-xs border-b border-gray-100 dark:border-gray-700 pb-2">
+                    <div class="font-medium"><span x-text="catalogFieldLabel(operation.field)"></span> <span class="text-gray-400" x-text="operation.risk"></span></div>
+                    <div class="text-green-600">Source: <span x-text="catalogValue(operation.source)"></span></div>
+                    <div class="text-gray-500">Destination: <span x-text="catalogValue(operation.destination)"></span></div>
+                  </div>
+                </template>
+              </div>
+              <button @click="executeCatalogTransfer()" :disabled="catalogTransferBusy || !catalogTransferPreview?.can_execute" class="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium">Confirm and transfer selected fields</button>
+            </div>
+
+            <div x-show="catalogTransferResult" class="mt-4 border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+              <div class="font-medium text-sm mb-2">Transfer result: <span x-text="catalogTransferResult?.status"></span></div>
+              <template x-for="operation in catalogTransferResult?.operations || []" :key="operation.field">
+                <div class="text-xs" :class="operation.status === 'error' ? 'text-red-500' : 'text-green-600'"><span x-text="operation.field"></span>: <span x-text="operation.error || operation.status"></span></div>
+              </template>
+              <template x-for="warning in catalogTransferResult?.warnings || []" :key="warning"><div class="text-xs text-amber-600" x-text="warning"></div></template>
+              <div x-show="catalogTransferResult?.rescan_recommended" class="text-xs text-gray-400 mt-2">Rescan the destination store to refresh collections and all derived comparison data.</div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
     <!-- ===== SETTINGS VIEW ===== -->
     <div x-show="currentView === 'settings'" class="p-6">
       <h2 class="text-2xl font-bold mb-6">Settings</h2>
@@ -3502,6 +3778,6 @@
   </div>
 </div>
 
-<script src="/static/js/app.js?v=20260625-02"></script>
+<script src="/static/js/app.js?v=20261028-01"></script>
 </body>
 </html>

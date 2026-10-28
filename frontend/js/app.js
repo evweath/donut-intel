@@ -31,6 +31,7 @@ function app() {
     navItems: [
       { id: 'dashboard',    icon: '📊', label: 'Dashboard',        badge: 0 },
       { id: 'products',     icon: '📦', label: 'Products',          badge: 0 },
+      { id: 'store-catalog', icon: '☰', label: 'Store Menus & Sync', badge: 0 },
       { id: 'competitors',  icon: '🏪', label: 'Competitors',       badge: 0 },
       { id: 'pricing',      icon: '💰', label: 'Price Comparison',  badge: 0 },
       { id: 'scans',        icon: '🔍', label: 'Scans',             badge: 0 },
@@ -237,6 +238,54 @@ function app() {
     shopifyConnLogTimer: null, // setInterval handle for polling the connection log
     newSiteForm: { show: false, name: '', shopify_store_url: '', is_destination: false },
     removeSiteConfirm: null,   // domain pending removal confirmation
+
+    // Live store catalog and navigation comparison
+    catalogStores: [],
+    catalogSelected: {},
+    catalogScan: {},
+    catalogScanTimer: null,
+    catalogTab: 'menus',
+    catalogMenuData: { stores: {} },
+    catalogMenuComparison: { menus: [], items: [] },
+    catalogMenuDiffOnly: true,
+    catalogProducts: { products: [], total: 0, page: 1, pages: 1 },
+    catalogProductSearch: '',
+    catalogDifferencesOnly: true,
+    catalogSelectedProduct: null,
+    catalogLoading: false,
+    catalogTransferFields: [
+      { key: 'title', label: 'Title' },
+      { key: 'body_html', label: 'Description (HTML)' },
+      { key: 'vendor', label: 'Vendor' },
+      { key: 'product_type', label: 'Product type' },
+      { key: 'handle', label: 'Handle / URL slug' },
+      { key: 'status', label: 'Status' },
+      { key: 'tags', label: 'Tags' },
+      { key: 'template_suffix', label: 'Theme template' },
+      { key: 'published_scope', label: 'Published scope' },
+      { key: 'options', label: 'Options' },
+      { key: 'variants', label: 'All variant details' },
+      { key: 'price', label: 'Prices' },
+      { key: 'compare_at_price', label: 'Compare-at prices' },
+      { key: 'sku', label: 'SKUs' },
+      { key: 'barcode', label: 'Barcodes' },
+      { key: 'weight', label: 'Weights' },
+      { key: 'weight_unit', label: 'Weight units' },
+      { key: 'taxable', label: 'Taxable flags' },
+      { key: 'requires_shipping', label: 'Shipping requirements' },
+      { key: 'inventory_policy', label: 'Inventory policies' },
+      { key: 'fulfillment_service', label: 'Fulfillment services' },
+      { key: 'images', label: 'Images' },
+      { key: 'metafields', label: 'Metafields' },
+      { key: 'collections', label: 'Custom collections' },
+    ],
+    catalogTransferForm: {
+      source_domain: '', destination_domain: '', fields: [],
+      create_if_missing: true, replace_images: false,
+    },
+    catalogTransferPreview: null,
+    catalogTransferResult: null,
+    catalogTransferBusy: false,
 
     // Live Search Log — external product/competitor search activity panel,
     // shown at the top of every page that runs external searches.
@@ -2502,6 +2551,189 @@ function app() {
         const res = await this.api('/api/confirmations');
         this.confirmedRows = res?.confirmations || {};
       } catch { this.confirmedRows = {}; }
+    },
+
+    // Live store catalog, menu comparison, and single-product transfer
+    catalogDomains() {
+      return this.catalogStores.map(s => s.domain).filter(domain => this.catalogSelected[domain]);
+    },
+    async initStoreCatalog() {
+      await this.loadCatalogStores();
+      if (this.catalogScan.running) this.pollCatalogScan();
+      await this.refreshCatalogView();
+    },
+    async loadCatalogStores() {
+      try {
+        const res = await this.api('/api/store-catalog/stores');
+        this.catalogStores = res?.stores || [];
+        this.catalogScan = res?.scan || {};
+        for (const store of this.catalogStores) {
+          if (this.catalogSelected[store.domain] === undefined) this.catalogSelected[store.domain] = true;
+        }
+      } catch (e) { this.toast('Failed to load stores: ' + e.message, 'error'); }
+    },
+    async refreshCatalogView() {
+      if (this.catalogTab === 'menus') return this.loadCatalogMenus();
+      if (this.catalogTab === 'menu-compare') return this.loadCatalogMenuComparison();
+      return this.loadCatalogProducts(1);
+    },
+    async startCatalogScan() {
+      const domains = this.catalogDomains();
+      if (!domains.length) { this.toast('Select at least one store to scan', 'warning'); return; }
+      try {
+        await this.api('/api/store-catalog/scan', {
+          method: 'POST', body: JSON.stringify({ domains }),
+        });
+        this.pollCatalogScan();
+      } catch (e) { this.toast('Could not start catalog scan: ' + e.message, 'error'); }
+    },
+    pollCatalogScan() {
+      if (this.catalogScanTimer) return;
+      this.catalogScanTimer = setInterval(async () => {
+        try {
+          const status = await this.api('/api/store-catalog/scan/status');
+          this.catalogScan = status || {};
+          if (!status?.running) {
+            clearInterval(this.catalogScanTimer);
+            this.catalogScanTimer = null;
+            await this.loadCatalogStores();
+            await this.refreshCatalogView();
+            this.toast('Store catalog scan finished', 'success');
+          }
+        } catch (e) {
+          clearInterval(this.catalogScanTimer);
+          this.catalogScanTimer = null;
+          this.toast('Lost catalog scan status: ' + e.message, 'error');
+        }
+      }, 2000);
+    },
+    async loadCatalogMenus() {
+      const domains = this.catalogDomains();
+      if (!domains.length) { this.toast('Select at least one store', 'warning'); return; }
+      this.catalogLoading = true;
+      try {
+        this.catalogMenuData = await this.api(`/api/store-catalog/menus?domains=${encodeURIComponent(domains.join(','))}`) || { stores: {} };
+      } catch (e) { this.toast('Failed to load menu analysis: ' + e.message, 'error'); }
+      finally { this.catalogLoading = false; }
+    },
+    async loadCatalogMenuComparison() {
+      const domains = this.catalogDomains();
+      if (domains.length < 2) { this.toast('Select at least two stores to compare menus', 'warning'); return; }
+      this.catalogLoading = true;
+      try {
+        this.catalogMenuComparison = await this.api(`/api/store-catalog/menu-comparison?domains=${encodeURIComponent(domains.join(','))}`) || { menus: [], items: [] };
+      } catch (e) { this.toast('Failed to compare menus: ' + e.message, 'error'); }
+      finally { this.catalogLoading = false; }
+    },
+    async loadCatalogProducts(page = 1) {
+      const domains = this.catalogDomains();
+      if (domains.length < 2) { this.toast('Select at least two stores to compare products', 'warning'); return; }
+      this.catalogLoading = true;
+      try {
+        const params = new URLSearchParams({
+          domains: domains.join(','), search: this.catalogProductSearch,
+          differences_only: String(this.catalogDifferencesOnly),
+          page: String(page), per_page: '25',
+        });
+        this.catalogProducts = await this.api(`/api/store-catalog/products?${params}`) || { products: [], total: 0, page: 1, pages: 1 };
+      } catch (e) { this.toast('Failed to compare products: ' + e.message, 'error'); }
+      finally { this.catalogLoading = false; }
+    },
+    flattenCatalogMenus(menus) {
+      const rows = [];
+      const walk = (items, menu, parents) => {
+        for (const item of items || []) {
+          const path = parents.concat(item.title || '');
+          rows.push({
+            id: item.id, menu: menu.title || menu.handle,
+            path: path.join(' › '), type: item.type, url: item.url,
+          });
+          walk(item.items, menu, path);
+        }
+      };
+      for (const menu of menus || []) walk(menu.items, menu, []);
+      return rows;
+    },
+    catalogTransferDomains() {
+      const unavailable = new Set(this.catalogProducts.unavailable || []);
+      const configured = this.catalogProducts.domains?.length ? this.catalogProducts.domains : Object.keys(this.catalogSelectedProduct?.details || {});
+      return configured.filter(domain => !unavailable.has(domain));
+    },
+    openCatalogProduct(group) {
+      this.catalogSelectedProduct = group;
+      const domains = Object.keys(group.details || {});
+      const allDomains = this.catalogTransferDomains();
+      const allowed = new Set(this.catalogTransferFields.map(field => field.key));
+      const fields = (group.difference_fields || []).filter(field => allowed.has(field));
+      const source = domains[0] || '';
+      this.catalogTransferForm = {
+        source_domain: source,
+        destination_domain: allDomains.find(domain => domain !== source) || '',
+        fields: fields.length ? fields : ['title'],
+        create_if_missing: true,
+        replace_images: false,
+      };
+      this.catalogTransferPreview = null;
+      this.catalogTransferResult = null;
+    },
+    closeCatalogProduct() {
+      this.catalogSelectedProduct = null;
+      this.catalogTransferPreview = null;
+      this.catalogTransferResult = null;
+    },
+    catalogTransferPayload() {
+      return {
+        source_domain: this.catalogTransferForm.source_domain,
+        destination_domain: this.catalogTransferForm.destination_domain,
+        handle: this.catalogSelectedProduct.handle,
+        fields: this.catalogTransferForm.fields,
+        create_if_missing: this.catalogTransferForm.create_if_missing,
+        replace_images: this.catalogTransferForm.replace_images,
+      };
+    },
+    async previewCatalogTransfer() {
+      const form = this.catalogTransferForm;
+      if (!form.source_domain || !form.destination_domain || form.source_domain === form.destination_domain) {
+        this.toast('Choose two different stores', 'warning'); return;
+      }
+      if (!form.fields.length) { this.toast('Select at least one field to transfer', 'warning'); return; }
+      this.catalogTransferBusy = true;
+      this.catalogTransferResult = null;
+      try {
+        this.catalogTransferPreview = await this.api('/api/store-catalog/transfer/preview', {
+          method: 'POST', body: JSON.stringify(this.catalogTransferPayload()),
+        });
+      } catch (e) {
+        this.catalogTransferPreview = null;
+        this.toast('Transfer preview failed: ' + e.message, 'error');
+      } finally { this.catalogTransferBusy = false; }
+    },
+    async executeCatalogTransfer() {
+      if (!this.catalogTransferPreview?.can_execute) {
+        this.toast('Review a valid transfer preview first', 'warning'); return;
+      }
+      const form = this.catalogTransferForm;
+      const message = `Transfer ${form.fields.length} field(s) for “${this.catalogSelectedProduct.title}” from ${form.source_domain} to ${form.destination_domain}?`;
+      if (!window.confirm(message)) return;
+      this.catalogTransferBusy = true;
+      try {
+        this.catalogTransferResult = await this.api('/api/store-catalog/transfer/execute', {
+          method: 'POST',
+          body: JSON.stringify({ ...this.catalogTransferPayload(), confirm: true }),
+        });
+        if (this.catalogTransferResult?.status === 'ok') this.toast('Product details transferred', 'success');
+        else this.toast('Transfer finished with errors; review the operation log', 'warning');
+        await this.loadCatalogProducts(this.catalogProducts.page || 1);
+      } catch (e) { this.toast('Transfer failed: ' + e.message, 'error'); }
+      finally { this.catalogTransferBusy = false; }
+    },
+    catalogValue(value) {
+      if (value === undefined || value === null || value === '') return '—';
+      const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+      return text.length > 500 ? text.slice(0, 500) + '…' : text;
+    },
+    catalogFieldLabel(key) {
+      return this.catalogTransferFields.find(field => field.key === key)?.label || key;
     },
 
     fmtDate(iso) { return iso ? new Date(iso).toLocaleString() : '—'; },

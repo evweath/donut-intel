@@ -4,6 +4,7 @@ Handles authentication, pagination (cursor-based Link headers), and
 light rate-limit back-off (leaky bucket: 40 calls / 2 per second).
 """
 import asyncio
+import json
 import logging
 import re
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -294,6 +295,37 @@ class ShopifyClient:
             params = {"limit": 250, "page_info": page_info}
         return collections
 
+    async def get_smart_collection_products(self, collection_id: int) -> List[Dict]:
+        products = []
+        cursor = None
+        query = """
+        query CollectionProducts($id: ID!, $cursor: String) {
+          collection(id: $id) {
+            products(first: 250, after: $cursor) {
+              pageInfo { hasNextPage endCursor }
+              nodes { id legacyResourceId handle }
+            }
+          }
+        }
+        """
+        while True:
+            data = await self.graphql(query, {
+                "id": f"gid://shopify/Collection/{collection_id}", "cursor": cursor,
+            })
+            collection = data.get("collection") or {}
+            connection = collection.get("products") or {}
+            for node in connection.get("nodes") or []:
+                products.append({
+                    "id": int(node["legacyResourceId"]),
+                    "handle": node.get("handle"),
+                    "admin_graphql_api_id": node.get("id"),
+                })
+            page = connection.get("pageInfo") or {}
+            if not page.get("hasNextPage"):
+                break
+            cursor = page.get("endCursor")
+        return products
+
     async def get_collects(self, collection_id: Optional[int] = None) -> List[Dict]:
         """Return product↔collection membership records."""
         collects = []
@@ -319,6 +351,56 @@ class ShopifyClient:
     async def remove_from_collection(self, collect_id: int) -> None:
         await self._delete(f"/collects/{collect_id}.json")
 
+    async def create_custom_collection(self, title: str) -> Dict:
+        result = await self._post("/custom_collections.json", {
+            "custom_collection": {"title": title}
+        })
+        return result.get("custom_collection", {})
+
+    async def find_custom_collection_by_title(self, title: str) -> Optional[Dict]:
+        target = (title or "").strip().lower()
+        if not target:
+            return None
+        resp = await self._get("/custom_collections.json", params={"title": title, "limit": 250})
+        for col in resp.json().get("custom_collections", []):
+            if (col.get("title") or "").strip().lower() == target:
+                return col
+        return None
+
+    async def find_product_by_handle(self, handle: str) -> Optional[Dict]:
+        if not handle:
+            return None
+        for status in ("active", "draft", "archived"):
+            resp = await self._get("/products.json", params={
+                "handle": handle, "limit": 1, "status": status,
+            })
+            products = resp.json().get("products", [])
+            if products:
+                return products[0]
+        return None
+
+    async def graphql(self, query: str, variables: Optional[Dict] = None) -> Dict:
+        assert self._client, "Use as async context manager"
+        payload = {"query": query, "variables": variables or {}}
+        for attempt in range(4):
+            resp = await _with_connect_retry(
+                lambda: self._client.post(f"{self.base}/graphql.json", json=payload),
+                host=self._host, label="GraphQL",
+            )
+            if resp.status_code == 429:
+                await asyncio.sleep(2 ** attempt)
+                continue
+            if resp.status_code >= 400:
+                connlog.record(f"✗ GraphQL {self._host} → {resp.status_code}", level="error")
+                raise ShopifyError(resp.status_code, resp.text)
+            data = resp.json()
+            if data.get("errors"):
+                body = json.dumps(data["errors"])
+                connlog.record(f"✗ GraphQL {self._host}: {body[:160]}", level="error")
+                raise ShopifyError(200, body)
+            return data.get("data") or {}
+        raise ShopifyError(429, "Rate limited")
+
     # -----------------------------------------------------------------------
     # Metafields
     # -----------------------------------------------------------------------
@@ -326,6 +408,19 @@ class ShopifyClient:
     async def get_product_metafields(self, product_id: int) -> List[Dict]:
         resp = await self._get(f"/products/{product_id}/metafields.json")
         return resp.json().get("metafields", [])
+
+    async def get_all_product_metafields(self) -> List[Dict]:
+        metafields = []
+        params: Dict[str, Any] = {"limit": 250, "metafield[owner_resource]": "product"}
+        while True:
+            resp = await self._get("/metafields.json", params=params)
+            batch = resp.json().get("metafields", [])
+            metafields.extend(batch)
+            page_info = self._next_page_info(resp)
+            if not page_info:
+                break
+            params = {"limit": 250, "page_info": page_info}
+        return metafields
 
     async def set_product_metafield(self, product_id: int, namespace: str,
                                     key: str, value: str, value_type: str = "string") -> Dict:
