@@ -7,7 +7,7 @@ PORT=$(python3 -c "import yaml; d=yaml.safe_load(open('config/settings.yaml')); 
 CERT="$SCRIPT_DIR/certs/cert.pem"
 KEY="$SCRIPT_DIR/certs/key.pem"
 
-echo "🍩 Starting Donut Intel Platform on https://localhost:$PORT"
+echo "🍩 Starting domainComp v3 on https://localhost:$PORT"
 echo "   API docs: https://localhost:$PORT/api/docs"
 echo "   Press Ctrl+C to stop"
 echo ""

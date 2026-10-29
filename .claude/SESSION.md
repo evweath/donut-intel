@@ -1,3 +1,12 @@
+# Session State — 2026-10-29
+
+## Rebrand to domainComp v3 + integrity coverage for ~/dev
+
+- App now brands itself **domainComp v3**: browser title, page header, sidebar (v3.0), FastAPI title/version (3.0.0), startup/shutdown logs, CLI header, `start.sh`/`start.py`/`stop.sh` messages, notification email identity (`[domainComp]` subject, `domainComp` sender). No logic changes; 44 tests pass; verified live at https://localhost:8743.
+- `bakerywholesalers.com` scans work again: the block was a Little Snitch deny rule (`iTerm2 via python@3.14 → bakery-wholesalers.myshopify.com:443`, flipped to deny by ls-week-review on 2026-09-28, 5,301 hits). User flipped it back to allow; scan completed: 2,743 products, 17 menus. All three stores now compare green.
+- **evw-integrity tier E** (in `/Users/evw/dev/security`): hash-only coverage of `~/dev` code, 15-min sweep (B,C,E) + nightly full (A–E). Hash-only by design — project git repos are the content record. DEV_EXCLUDE_RE skips venvs/builds/caches/backups/DBs/archives. Deployed via `sudo bash evw-integrity-setup.sh` (re-run to pick up E).
+- Investigation note: no evidence of unauthorized changes to this repo — git fsck clean, all 300 commits by owner identities, local == origin, no webhooks/unknown collaborators. Kimi session wire logs (security workspace, session_1e159d14, 2026-10-28) fully account for yesterday's work.
+
 # Session State — 2026-10-28
 
 ## Store menus, catalog comparison, and individual transfer

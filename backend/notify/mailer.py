@@ -61,7 +61,7 @@ def send_email(
 
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = formataddr(("Donut Intel", s["from_address"]))
+    msg["From"] = formataddr(("domainComp", s["from_address"]))
     msg["To"] = ", ".join(recipients)
     msg.set_content(body)
     if html:

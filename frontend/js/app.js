@@ -1,5 +1,5 @@
 /**
- * prodComp Platform — Frontend Alpine.js application v2.0
+ * domainComp v3 — Frontend Alpine.js application
  * Covers all features F01-F74 (except F68 which was excluded).
  */
 

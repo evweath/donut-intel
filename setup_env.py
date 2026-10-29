@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Cross-platform setup script for prodComp.
+Cross-platform setup script for domainComp v3.
 Works on macOS and Windows.
 Usage: python setup_env.py
 
@@ -55,7 +55,7 @@ def generate_certs() -> None:
 
 
 def main() -> None:
-    print('prodComp — Setup')
+    print('domainComp v3 — Setup')
     print('=' * 40)
 
     total = 5

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-prodComp — CLI (F73)
+domainComp v3 — CLI (F73)
 Usage: python cli.py <command> [options]
 """
 import argparse
@@ -294,7 +294,7 @@ def cmd_stats(args):
 
     health = db_health_check()
     print(f"\n{'='*50}")
-    print(f"  prodComp — Catalog Stats")
+    print(f"  domainComp v3 — Catalog Stats")
     print(f"{'='*50}")
     print(f"  Total Products:         {total}")
     print(f"  Source Listings:        {sources}")
@@ -419,7 +419,7 @@ def cmd_schedule(args):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(prog="donut-intel", description="prodComp CLI")
+    parser = argparse.ArgumentParser(prog="donut-intel", description="domainComp v3 CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
     # scan

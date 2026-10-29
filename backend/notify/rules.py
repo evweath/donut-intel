@@ -86,7 +86,7 @@ def rule_summary(rule: Dict[str, Any]) -> str:
 def format_email(job_name: str, search_label: str, matched: List[Dict[str, Any]],
                  rule: Dict[str, Any]) -> tuple:
     """Build (subject, text_body) for a notification email."""
-    subject = f"[Donut Intel] {job_name}: {len(matched)} matching result(s)"
+    subject = f"[domainComp] {job_name}: {len(matched)} matching result(s)"
     lines = [
         f"Scheduled search \"{job_name}\" found {len(matched)} result(s) matching your alert.",
         "",
@@ -103,5 +103,5 @@ def format_email(job_name: str, search_label: str, matched: List[Dict[str, Any]]
         if r.get("url"):
             lines.append(f"     {r['url']}")
     lines.append("")
-    lines.append("— Donut Intel scheduler")
+    lines.append("— domainComp scheduler")
     return subject, "\n".join(lines)
