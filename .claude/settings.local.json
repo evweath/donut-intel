@@ -193,7 +193,9 @@
       "Bash(launchctl kickstart *)",
       "Bash(kill -9 18741)",
       "Bash(rm -rf /Users/evw/dev/productComparison/donut-intel/backend/shopify /Users/evw/dev/productComparison/donut-intel/backend/dedup)",
-      "Bash(rm /Users/evw/dev/productComparison/donut-intel/backend/search/pages/find_customers.py)"
+      "Bash(rm /Users/evw/dev/productComparison/donut-intel/backend/search/pages/find_customers.py)",
+      "Bash(break)",
+      "Bash(disown)"
     ]
   },
   "spinnerTipsEnabled": false
